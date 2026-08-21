@@ -1,0 +1,50 @@
+# 级联全双工语音交互系统 · 配置（软件设计 v2.1 §7.1）
+audio:
+  sample_rate: 16000
+  frame_ms: 30
+  aec_enabled: false          # P1: 真 AEC
+  device: null                # null = 默认麦克风
+
+vad:
+  judge: rule                 # rule(半双工,缺省) | semantic(全双工,P1)
+  threshold_segment: 0.5
+  threshold_interrupt: 0.7    # 播放期抬高
+  min_silence_ms: 500         # 判停（250-1250 可调档）
+  pre_roll_ms: 1200           # 打断回滚（采集侧）
+  window_ms: 300
+  window_ratio: 0.8
+  grace_ms: 500
+  interrupt_ceiling_db: 18.0
+
+fsm:
+  wake_window_ms: 8000
+  final_fallback_ms: 2000
+  listen_window_ms: 1200
+  llm_first_token_ms: 5000
+  llm_total_ms: 30000
+  tts_first_block_ms: 3000
+  session_total_s: 1800
+  history_max_rounds: 20
+
+model:
+  asr_provider: funasr          # funasr(WS真流式) | qwen3(HTTP一次性) | mock
+  llm_provider: mock          # qwen3 | openai | mock
+  tts_provider: mock          # qwen3(DashScope) | mock
+  # DashScope（Qwen3-ASR-Flash / Qwen3-TTS-Instruct-Flash）—— 实测协议已通
+  dashscope_api_key: ""               # 或环境变量 DASHSCOPE_API_KEY
+  dashscope_host: "llm-5ienv5iasbci5bt7.cn-beijing.maas.aliyuncs.com"   # 专属业务空间
+  asr_model: "qwen3-asr-flash"        # compatible-mode chat/completions + input_audio(base64 data URL)
+  tts_model: "qwen3-tts-instruct-flash"   # multimodal-generation → output.audio.url 下载
+  tts_voice: "Cherry"
+  # LLM 快慢融合（软件设计 v2.2 §2.5）
+  llm_fast_provider: "ollama"          # ollama(本地 qwen3.5:4b-mlx, /api/chat+think:false) | mock
+  llm_fast_base_url: "http://127.0.0.1:11434"   # Ollama 原生端点
+  llm_fast_model: "qwen3.5:4b-mlx"
+  llm_slow_provider: "mock"           # qwen3(云端 qwen3.8-27b) | openai | mock
+  llm_slow_base_url: "https://llm-5ienv5iasbci5bt7.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+  llm_slow_api_key: ""                # 同 dashscope_api_key 或独立
+  llm_slow_model: "qwen3.5-27b"       # 实测 2026-08-20: 首token 454ms 稳定；qwen3.6-27b 首token 13s(冷实例)、qwen3.7-flash 5.1s(波动) → 均弃
+  semantic_vad_url: "ws://127.0.0.1:2335/v1/vad"
+
+session_jsonl: sessions.jsonl
+log_level: INFO

@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>语音助手</title>
+<style>
+  :root {
+    --bg0: #0b0f1a; --bg1: #131a2e;
+    --card: rgba(255,255,255,.05); --card-border: rgba(255,255,255,.09);
+    --text: #eef1f8; --text-dim: #8b93a7;
+    --accent: #5b8cff; --accent2: #7c5bff;
+    --user-bubble: linear-gradient(135deg,#2b6bff,#5b8cff);
+    --ai-bubble: rgba(255,255,255,.07);
+    --green: #34d399; --red: #f87171; --amber: #fbbf24;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    background: radial-gradient(1200px 800px at 70% -10%, #1d2a52 0%, var(--bg0) 55%), var(--bg0);
+    color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* 顶栏 */
+  header {
+    padding: 14px 22px; display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--card-border); background: rgba(11,15,26,.6); backdrop-filter: blur(12px);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; }
+  .brand .logo { width: 30px; height: 30px; border-radius: 9px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: flex; align-items: center; justify-content: center; font-size: 15px; }
+  .conn { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-dim); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }
+  .dot.on { background: var(--green); box-shadow: 0 0 8px var(--green); }
+
+  /* 主区 */
+  main { flex: 1; overflow-y: auto; padding: 24px 22px; scroll-behavior: smooth; }
+  .chat { max-width: 680px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+
+  .msg { max-width: 82%; padding: 12px 16px; border-radius: 16px; font-size: 15px; line-height: 1.6;
+    white-space: pre-wrap; word-break: break-word; animation: rise .25s ease; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .msg.user { align-self: flex-end; background: var(--user-bubble); border-bottom-right-radius: 5px; }
+  .msg.ai { align-self: flex-start; background: var(--ai-bubble); border: 1px solid var(--card-border);
+    border-bottom-left-radius: 5px; backdrop-filter: blur(6px); }
+  .msg .tag { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 5px; letter-spacing: .3px; }
+  .msg .lat { display: block; font-size: 11px; color: var(--text-dim); margin-top: 5px; opacity: .75; }
+  .msg.user .lat { color: rgba(255,255,255,.7); }
+  .msg .tag .fast-tag { color: var(--amber); }
+  .msg .tag .slow-tag { color: var(--green); }
+  .msg .fast-text { color: var(--amber); font-size: 13px; margin-bottom: 4px; }
+  .caret { display: inline-block; width: 2px; height: 16px; background: var(--accent); vertical-align: -3px;
+    margin-left: 2px; animation: blink .8s infinite; }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+
+  /* 底部 */
+  footer { padding: 18px 22px 26px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .stage { font-size: 13px; color: var(--text-dim); min-height: 20px; letter-spacing: .5px; }
+  .stage .spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid var(--text-dim);
+    border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* 唤醒按钮（波纹光环）——波形独立横条在按钮上方，不覆盖按钮 */
+  .wake-wrap { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+  .wave-strip { width: 240px; height: 44px; border-radius: 10px; background: rgba(255,255,255,.05);
+    border: 1px solid var(--card-border); display: block; }
+  .wave-btn-row { position: relative; display: flex; align-items: center; justify-content: center; }
+  .ripple { position: absolute; border-radius: 50%; border: 2px solid rgba(91,140,255,.35);
+    animation: ripple 2s ease-out infinite; pointer-events: none; }
+  @keyframes ripple { 0% { width: 84px; height: 84px; opacity: .9; }
+    100% { width: 190px; height: 190px; opacity: 0; } }
+  .wake-btn {
+    width: 84px; height: 84px; border-radius: 50%; border: none; cursor: pointer; position: relative;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #fff; font-size: 30px; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 6px 24px rgba(91,140,255,.4), inset 0 1px 0 rgba(255,255,255,.25);
+    transition: transform .12s, box-shadow .2s; user-select: none; outline: none;
+  }
+  .wake-btn:active { transform: scale(.93); }
+  .wake-btn.recording { background: linear-gradient(135deg, #f43f5e, #fb7185);
+    box-shadow: 0 6px 30px rgba(244,63,94,.5), inset 0 1px 0 rgba(255,255,255,.25); }
+  .wake-btn.thinking { background: linear-gradient(135deg, #475569, #64748b); cursor: wait; }
+  .wake-btn:disabled { cursor: not-allowed; }
+  /* 波形 canvas 已移出按钮（.wave-strip 独立横条）——按钮内不再有 canvas */
+
+  .hint { font-size: 12px; color: var(--text-dim); }
+  .cont-row { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 14px; }
+  .cont-btn { background: rgba(255,255,255,.08); border: 1px solid var(--card-border); color: var(--text-dim);
+    padding: 8px 18px; border-radius: 999px; font-size: 13px; cursor: pointer; transition: all .25s; }
+  .cont-btn:hover { background: rgba(255,255,255,.14); }
+  .cont-btn.on { background: rgba(52,211,153,.18); border-color: var(--green); color: var(--green);
+    box-shadow: 0 0 18px rgba(52,211,153,.35); animation: pulseGreen 1.6s infinite; }
+  @keyframes pulseGreen { 0%,100% { box-shadow: 0 0 12px rgba(52,211,153,.25); } 50% { box-shadow: 0 0 24px rgba(52,211,153,.5); } }
+  .cont-btn:disabled { opacity: .45; cursor: not-allowed; }
+  .vad-info { font-size: 11px; color: var(--text-dim); margin-top: 8px; min-height: 14px;
+    font-family: ui-monospace, Menlo, monospace; opacity: .8; }
+  .err { color: var(--red); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="logo">🎙</span>语音助手 <span style="font-weight:400;font-size:12px;color:var(--text-dim)">快慢融合 · qwen3.5:4b-mlx + qwen3.6-27b</span></div>
+  <div class="conn"><span class="dot" id="connDot"></span><span id="connText">连接中…</span></div>
+</header>
+
+<main id="main">
+  <div class="chat" id="chat">
+    <div class="msg ai"><span class="tag">欢迎</span>按住下方按钮说话，松开后开始识别。<b>支持连续多轮对话</b>（AI 会记住上下文）。</div>
+  </div>
+</main>
+
+<footer>
+  <div class="stage" id="stage"></div>
+  <div class="wake-wrap">
+    <canvas id="wave" class="wave-strip" width="240" height="44"></canvas>
+    <div class="wave-btn-row">
+      <div class="ripple" id="ripple"></div>
+      <button class="wake-btn" id="wakeBtn" disabled><span id="micIcon">🎤</span></button>
+    </div>
+  </div>
+  <div class="cont-row">
+    <button class="cont-btn" id="contBtn" disabled>🎧 持续对话</button>
+    <div class="hint" id="hint">按住说话 · 松开识别</div>
+  </div>
+  <div class="vad-info" id="vadInfo"></div>
+</footer>
+
+<script src="/vendor/ort.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const btn = $('wakeBtn'), chat = $('chat'), stage = $('stage'), hint = $('hint');
+const micIcon = $('micIcon'), ripple = $('ripple'), waveCanvas = $('wave');
+
+let mediaRecorder = null, chunks = [], recording = false, busy = false;
+let audioCtx = null, analyser = null, animId = null;
+let playQueue = {};   // 句子音频队列（idx → Audio）
+let metrics = {};     // 各阶段时延（asr_text/asr_final/silence/slow_first/tts_first/total）
+let turnId = 0;       // 对话轮次（metrics 归属校验：done 后残留播放链的 playNow 不得污染下一轮）
+let speechStartEpoch = 0, speechEndEpoch = 0;   // 人开始说话/说完话的 epoch 毫秒（时延基准）
+let tSendStart = 0;                              // sendAudio 发出时刻（上传+ASR 时延起点）
+let isReplying = false;                          // AI 回复播放中（抑制 VAD 切段发送，防回声串扰）
+let clientId = localStorage.getItem('voice_client_id') || ('c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+localStorage.setItem('voice_client_id', clientId);
+let userMsg = null;    // 当前用户气泡（partial 实时更新）
+const contBtn = $('contBtn');
+
+// ---- 前端日志（console + 环形缓冲 + 自动上报 server；window.exportVoiceLog() 导出） ----
+const VOICE_LOG = { max: 500, buf: [], pending: [], timer: null };
+function vlog(level, tag, msg, extra) {
+  try {
+    const ts = new Date().toISOString().slice(11, 23);
+    const line = `[voice][${ts}][${level}][${tag}] ${msg}` + (extra !== undefined ? ' ' + JSON.stringify(extra) : '');
+    (console[level === 'ERROR' ? 'error' : level === 'WARN' ? 'warn' : 'log'])(line);
+    VOICE_LOG.buf.push(line);
+    if (VOICE_LOG.buf.length > VOICE_LOG.max) VOICE_LOG.buf.shift();
+    // 自动上报 server（批量 2s 一批，fire-and-forget）——定位问题无需手动导出
+    VOICE_LOG.pending.push(line);
+    if (!VOICE_LOG.timer) {
+      VOICE_LOG.timer = setTimeout(() => {
+        VOICE_LOG.timer = null;
+        const batch = VOICE_LOG.pending.splice(0);
+        if (batch.length) {
+          try {
+            fetch('/api/log', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ lines: batch }),
+            }).catch(() => {});
+          } catch (e) {}
+        }
+      }, 2000);
+    }
+  } catch (e) { /* 日志失败不影响业务 */ }
+}
+window.exportVoiceLog = () => VOICE_LOG.buf.join('\n');
+
+// ---- 免唤醒持续对话（常驻录音 + Silero VAD v6 判定——与桌面端同模型同逻辑） ----
+let contMode = false, contStream = null;
+let contVoice = false, contVoiceMs = 0, contSilenceMs = 0, contLowVoteMs = 0, contLastTs = 0, contAnimId = null, contAnalyser = null;
+let contVoiceSince = 0;   // 语音触发时刻（超长保护：环境持续音防卡死）
+let contCoolUntil = 0;    // 判停冷却截止（切段后 2s 内不触发——防环境音立即再触发循环）
+let contLastLogTs = 0;    // VAD 状态摘要日志节流
+let contLastSpeechTs = 0; // 最后一个语音确认帧时刻（判停时长=语音结束→确认说完）
+let contJudgeMs = 0;      // 最近一次判停时长（语音结束→判停，前端显示用）
+let contSilero = null;         // {session, state}——onnxruntime Silero v6
+let contProc = null;           // ScriptProcessor（不重叠 PCM 采集，替代 MediaRecorder）
+let contPcm = [];              // 16k Float32 录音累积（切段时组装 wav 发送）
+let contVadPcm = [];           // 16k 累积（VAD 512 帧切分）
+let contVadQueue = [];         // 待推理的 512 帧队列（rAF 消费）
+const SILERO_THRESHOLD = 0.5;  // 与桌面 RuleVadJudge 阈值一致
+const CONT_MIN_SPEECH_MS = 250;  // 与桌面 min_speech_ms 一致
+const CONT_SILENCE_MS = 800;     // 判停：停顿 ≥800ms 视为说完（500ms 会抢答——中文口语停顿常超 500ms）
+const CONT_SILERO_SR = 16000;
+// 抗背景人声/噪声双钳制（对齐桌面 RuleVadJudge：窗口 10 帧 80% + 能量门限）
+const CONT_VOTE_WIN = 10;        // 投票窗口（帧）
+const CONT_VOTE_MIN = 7;         // 进入语音 ≥70%（未激活时严格）
+const CONT_VOTE_EXIT = 5;        // 退出语音 <50%（滞回：语音中短停顿不中断）
+const ENERGY_RATIO = 4.0;        // 帧能量需 > 噪声底 × 4（挡 20 倍+衰减远场人声，不误杀轻声）
+const ENERGY_FLOOR_FRAME = 0.005;  // 帧级能量下限（宽松：轻声/近麦弱信号可触发）
+const ENERGY_FLOOR_SEG = 0.012;    // 段级能量下限（严格：用户语音峰值块 0.03+ 通过；背景人声 0.008 被挡）
+let contNoiseFloor = 0.005;      // 自适应噪声底（min 跟踪 + 缓慢上升）
+let contVoteWin = [];            // 最近 N 帧投票结果（0/1）
+let contSegSpeech = 0, contSegTotal = 0;   // 本段语音确认帧统计（占比过滤背景人声断续段）
+let contSegStart = 0;                      // 本段音频起点（语音触发时记录，切段从触发点取——排除播放期残留）
+const SEG_SPEECH_MIN_RATIO = 0.35;         // 段内语音确认占比下限（低于→视为背景人声/噪声段）
+
+async function initSilero() {
+  try {
+    if (!window.ort) throw new Error('onnxruntime-web 未加载');
+    ort.env.wasm.wasmPaths = '/vendor/';
+    const session = await ort.InferenceSession.create('/vendor/silero_vad.onnx');
+    contSilero = { session, state: new Float32Array(2 * 128) };  // LSTM 双方向 state
+    console.log('✅ Silero VAD v6 (ONNX) 就绪');
+    return true;
+  } catch (e) {
+    console.warn('Silero ONNX 加载失败:', e);
+    return false;
+  }
+}
+async function sileroProb(buf512) {
+  // 输入: input[1,512] float32 (-1~1) + state[2,1,128] + sr
+  const feeds = {
+    input: new ort.Tensor('float32', buf512, [1, 512]),
+    state: new ort.Tensor('float32', contSilero.state, [2, 1, 128]),
+    sr: new ort.Tensor('int64', new BigInt64Array([BigInt(CONT_SILERO_SR)]), []),
+  };
+  const out = await contSilero.session.run(feeds);
+  contSilero.state = out.stateN.data;   // state 保持（与桌面 torch 版一致）
+  return out.output.data[0];
+}
+
+async function toggleCont() {
+  if (!contMode) await startContMode(); else stopContMode();
+}
+async function startContMode() {
+  if (busy) return;
+  vlog('INFO', 'MODE', '持续对话开启');
+  try {
+    if (!contSilero) {
+      const ok = await initSilero();
+      if (!ok) { setStage('❌ Silero VAD 加载失败'); return; }
+    }
+    contStream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = audioCtx.createMediaStreamSource(contStream);
+    contAnalyser = audioCtx.createAnalyser();
+    contAnalyser.fftSize = 1024; src.connect(contAnalyser);
+    // ScriptProcessor：不重叠 PCM 采集 → 重采样 16k（Silero 输入要求）。
+    // 修复根因：Analyser 窗口是重叠滑窗（且原始采样率 48k），直接喂 16k 模型
+    // 语音概率被压到 0.5 阈值边缘 → 持续对话无法识别说话。
+    contPcm = []; contVadPcm = []; contVadQueue = [];
+    contNoiseFloor = 0.005; contVoteWin = [];
+    contSegSpeech = 0; contSegTotal = 0; contSegStart = 0; contLowVoteMs = 0; contVoiceSince = 0; contCoolUntil = 0;
+    contProc = audioCtx.createScriptProcessor(4096, 1, 1);
+    src.connect(contProc);
+    contProc.connect(audioCtx.destination);   // 必须连接输出才触发回调
+    contProc.onaudioprocess = e => {
+      e.outputBuffer.getChannelData(0).fill(0);   // 静音输出（防麦克风回授）
+      const ch = e.inputBuffer.getChannelData(0);
+      const ratio = audioCtx.sampleRate / 16000;
+      const outLen = Math.floor(ch.length / ratio);
+      for (let i = 0; i < outLen; i++) {
+        const s = ch[Math.floor(i * ratio)];
+        contPcm.push(s);               // 录音累积（切段发送）
+        contVadPcm.push(s);            // VAD 累积
+      }
+      while (contVadPcm.length >= 512) {
+        const f = new Float32Array(512);
+        f.set(contVadPcm.slice(0, 512));
+        contVadPcm.splice(0, 512);
+        contVadQueue.push(f);          // 32ms 帧 → rAF 消费
+      }
+    };
+    contMode = true;
+    contSilero.state.fill(0);     // state 清零（新会话）
+    btn.classList.add('recording'); ripple.style.display = 'block';
+    micIcon.textContent = '👂';
+    setStage('<span class="spinner"></span>Silero 聆听中…'); setHint('说话自动识别 · 静音自动切段');
+    contBtn.classList.add('on'); contBtn.textContent = '⏹ 退出持续';
+    contLastTs = performance.now();
+    contLoop();
+  } catch (e) {
+    setStage('❌ 无法访问麦克风'); setHint('请在浏览器设置中允许麦克风权限');
+  }
+}
+async function contLoop() {
+  if (!contMode || !contAnalyser) return;
+  contAnimId = requestAnimationFrame(contLoop);
+  // 消费 ScriptProcessor 推入的 16k 512 帧（每帧 = 32ms 音频，固定 dt）
+  while (contVadQueue.length > 0) {
+    const buf = contVadQueue.shift();
+    let prob = 0;
+    try { prob = await sileroProb(buf); } catch (e) { /* 推理失败暂跳过 */ }
+    // 帧能量 RMS + 自适应噪声底（min 跟踪、缓慢上升跟随环境）
+    let rms = 0;
+    for (let i = 0; i < 512; i++) rms += buf[i] * buf[i];
+    rms = Math.sqrt(rms / 512);
+    contNoiseFloor = Math.min(contNoiseFloor * 1.0002, rms);   // min 跟踪、极慢上升（防背景人声拉高门槛）
+    const energyOk = rms > Math.max(contNoiseFloor * ENERGY_RATIO, ENERGY_FLOOR_FRAME);
+    // 双钳制：Silero 概率 + 能量门限 → 10 帧窗口投票。
+    // 滞回：未激活时 ≥7 才进入（严格防背景人声）；语音中 <5 才退出（容忍句中停顿）
+    contVoteWin.push((prob > SILERO_THRESHOLD && energyOk) ? 1 : 0);
+    if (contVoteWin.length > CONT_VOTE_WIN) contVoteWin.shift();
+    const vote = contVoteWin.reduce((a, b) => a + b, 0);
+    const dt = 32;   // 512/16000 = 32ms（固定音频时间，不用 wall clock）
+    const isSpeech = contVoice ? (vote >= CONT_VOTE_EXIT) : (vote >= CONT_VOTE_MIN);
+    // 段内语音确认统计（仅 contVoice 期间，供切段时占比过滤）
+    if (contVoice) {
+      contSegTotal++;
+      if (isSpeech) contSegSpeech++;
+    }
+    if (isSpeech) {
+      contVoiceMs += dt; contSilenceMs = 0;
+      contLastSpeechTs = Date.now();   // 最后语音帧时刻（判停时长基准）
+      if (vote < CONT_VOTE_MIN) contLowVoteMs += dt; else contLowVoteMs = 0;   // 中等级投票（环境音 5-6）连续计时
+      // 判停检查（isSpeech=true 时也执行——环境音 vote≥7 持续时 else 分支永远不进，
+      // 若只放 else 会导致超长兜底永不触发、'聆听中'无限卡死）
+      if (contVoice) {
+        const forceCut = (Date.now() - contVoiceSince > 15000);
+        if (contLowVoteMs >= 2000 || forceCut) {
+          const reason = forceCut ? '超长15s' : '环境音2s';
+          const segFrames = contPcm.length - contSegStart;
+          contVoice = false; contSilenceMs = 0; contLowVoteMs = 0;
+          contCoolUntil = Date.now() + 2000;   // 冷却：防环境音判停后立即再触发
+          contJudgeMs = Date.now() - contLastSpeechTs;   // 判停时长（环境音/超长判停也统计）
+          speechEndEpoch = Date.now();
+          vlog('INFO', 'VAD', '静音切段', { prob: +prob.toFixed(2), vote, segFrames: contSegTotal, segSpeech: contSegSpeech, reason });
+          contSilero.state.fill(0);
+          if (forceCut) {
+            // 超长段直接丢弃：环境音持续 15s 发出去会被 ASR 识别→回复→播放→再触发（循环）；
+            // 用户正常指令 <15s，丢弃安全。冷却 10s 防环境音循环触发
+            contPcm = []; contSegSpeech = 0; contSegTotal = 0;
+            contCoolUntil = Date.now() + 10000;
+            vlog('WARN', 'FLUSH', '超长段丢弃（环境持续音）', { segFrames });
+          } else {
+            flushContSegment();
+          }
+        }
+      }
+      if (!contVoice && contVoiceMs >= CONT_MIN_SPEECH_MS && Date.now() > contCoolUntil) {
+        contVoice = true; contVoiceMs = 0;
+        contSegSpeech = 0; contSegTotal = 0;   // 语音确认起统计
+        contSegStart = Math.max(0, contPcm.length - 8000);   // pre-roll 250ms（触发前已说开头，防截断）
+        contVoiceSince = Date.now();
+        speechStartEpoch = Date.now();   // VAD 确认语音=人开始说话（时延基准 t0）
+        vlog('INFO', 'VAD', '语音开始', { prob: +prob.toFixed(2), rms: +rms.toFixed(4), vote });
+        // AI 播放中不覆盖播放提示（播放期检测到的可能是耳机漏音，不是用户语音）
+        if (!isReplying) setStage('🎤 聆听中…（检测到语音）');
+      } else if (contVoice && !isReplying && Date.now() - contVoiceSince > 5000) {
+        // 触发 5s 未判停 → 显示降级（环境音持续场景不一直误导显示'检测到语音'）
+        setStage('🎤 聆听中…');
+      }
+    } else {
+      contVoiceMs = 0; contLowVoteMs = 0;
+      if (contVoice) {
+        contSilenceMs += dt;
+        // 判停：全静音 500ms（正常说完）
+        if (contSilenceMs >= CONT_SILENCE_MS) {
+          contVoice = false; contSilenceMs = 0;
+          contCoolUntil = Date.now() + 2000;   // 冷却：防环境音判停后立即再触发
+          contJudgeMs = Date.now() - contLastSpeechTs;   // 判停时长：语音结束→确认说完（显示'判停'）
+          speechEndEpoch = Date.now();   // 静音判停=人说完话
+          vlog('INFO', 'VAD', '静音切段', { prob: +prob.toFixed(2), vote, segFrames: contSegTotal, segSpeech: contSegSpeech, reason: '静音判停' });
+          contSilero.state.fill(0);   // 切段后 state 重置（与桌面 end_segment 一致）
+          flushContSegment();
+        }
+      }
+    }
+    // VAD 状态摘要（1s 一条——定位'一直聆听'问题：prob/rms/vote/energyOk 真实值）
+    if (!contLastLogTs || Date.now() - contLastLogTs > 1000) {
+      contLastLogTs = Date.now();
+      vlog('INFO', 'VAD', '状态', { prob: +prob.toFixed(2), rms: +rms.toFixed(4), floor: +contNoiseFloor.toFixed(4), energyOk, vote, isSpeech, voice: contVoice });
+    }
+    // 实时显示（最后一帧概率 + 能量）
+    const vadEl = $('vadInfo');
+    if (vadEl) {
+      vadEl.textContent = `Silero ${prob.toFixed(2)} / 能量 ${rms.toFixed(3)} / 底 ${contNoiseFloor.toFixed(3)} · 投票 ${vote}/${CONT_VOTE_WIN} · 阈值 ${SILERO_THRESHOLD}`;
+    }
+  }
+  // 波形常驻（复用 waveCanvas）
+  const ctx = waveCanvas.getContext('2d');
+  ctx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+  const bars = 24, w = waveCanvas.width / bars;
+  const fdata = new Uint8Array(contAnalyser.frequencyBinCount);
+  contAnalyser.getByteFrequencyData(fdata);
+  for (let i = 0; i < bars; i++) {
+    const v = fdata[i * 3] / 255;
+    const h = Math.max(2, v * waveCanvas.height * 0.85);
+    ctx.fillStyle = `rgba(52,211,153,${0.35 + v * 0.65})`;
+    ctx.fillRect(i * w + 2, (waveCanvas.height - h) / 2, w - 4, h);
+  }
+}
+async function flushContSegment() {
+  // 静音切段 → 从语音触发点（pre-roll 250ms）取 16k PCM 组装 wav 发送
+  // 关键：段 = [语音触发, 静音判停]，排除回复播放期累积的残留音频（否则 ASR 识别错）
+  const segLen = contPcm.length - contSegStart;
+  if (segLen < 1600) { contPcm = []; vlog('WARN', 'FLUSH', '丢弃：语音段过短', { segLen }); return; }   // <100ms 视为噪声段
+  // 段内语音确认占比过滤：仅长段（≥50 帧 = 1.6s）检查——短指令（'关灯''开灯'1-2 词，
+  // 段 1-1.3s）占比 20-35% 波动（触发判定消耗前 250ms + 判停尾静音 800ms 稀释），
+  // 30 帧门槛仍误杀（实测 22-29% 被丢、36% 过线——临界波动决定成败）；
+  // 背景人声段通常 >1.6s（持续音）→ 仍过滤；短段由 server ASR 噪声过滤兜底
+  if (contSegTotal >= 50 && contSegSpeech / contSegTotal < SEG_SPEECH_MIN_RATIO) {
+    vlog('WARN', 'FLUSH', '丢弃：语音占比低（疑似背景人声）', { speech: contSegSpeech, total: contSegTotal });
+    contPcm = []; contSegSpeech = 0; contSegTotal = 0;
+    return;
+  }
+  const segRmsMax = Math.max(contNoiseFloor * ENERGY_RATIO, ENERGY_FLOOR_SEG);
+  // 段级能量二次确认：段内最大 50ms 块 rms（不被 pre-roll/尾静音稀释——
+  // 整段平均会把语音能量拉低导致真实语音被误杀，实测用户语音段平均 0.016 < 门限 0.02 被丢）
+  let segBest = 0;
+  for (let i = contSegStart; i + 1600 <= contPcm.length; i += 1600) {
+    let s = 0;
+    for (let j = i; j < i + 1600; j++) s += contPcm[j] * contPcm[j];
+    segBest = Math.max(segBest, s / 1600);
+  }
+  segBest = Math.sqrt(segBest);
+  if (segBest < segRmsMax) {
+    vlog('WARN', 'FLUSH', '丢弃：段能量低于门限', { segBest: +segBest.toFixed(4), floor: +contNoiseFloor.toFixed(4) });
+    contPcm = [];
+    return;
+  }
+  const pcm = new Float32Array(segLen);
+  pcm.set(contPcm.slice(contSegStart));   // slice（普通数组无 subarray，subarray 会 TypeError 静默失败）
+  contPcm = []; contSegSpeech = 0; contSegTotal = 0;
+  if (!contMode) return;
+  if (busy) {
+    vlog('WARN', 'FLUSH', '丢弃：busy（回复生成中）', { frames: pcm.length });
+    return;
+  }
+  if (isReplying) {
+    // barge-in：用户说话打断 AI 播放（耳机场景无回声；外放场景 AEC + server
+    // is_tts_echo 兜底——ASR 文本与播放内容逐字相似才过滤，正常插话不误杀）
+    vlog('INFO', 'FLUSH', '插话打断播放（barge-in）', { frames: pcm.length });
+    stopAllPlayback();
+  }
+  vlog('INFO', 'FLUSH', '发送段', { frames: pcm.length, ms: Math.round(pcm.length / 16) });
+  setStage('🎤 识别中…'); setHint('持续聆听中…');
+  await sendAudio(pcmToWavBase64(pcm));
+}
+function stopContMode() {
+  contMode = false;
+  vlog('INFO', 'MODE', '持续对话关闭');
+  if (contAnimId) cancelAnimationFrame(contAnimId); contAnimId = null;
+  if (contProc) { try { contProc.disconnect(); } catch (e) {} contProc = null; }
+  if (contStream) contStream.getTracks().forEach(t => t.stop());
+  contStream = null; contPcm = []; contVadPcm = []; contVadQueue = [];
+  contVoteWin = []; contNoiseFloor = 0.005; contSegSpeech = 0; contSegTotal = 0; contSegStart = 0;
+  contVoice = false; contSilenceMs = 0; contLowVoteMs = 0; contVoiceSince = 0; contCoolUntil = 0;
+  contAnalyser = null; isReplying = false;
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+  btn.classList.remove('recording'); ripple.style.display = 'none';
+  micIcon.textContent = '🎤';
+  const ctx = waveCanvas.getContext('2d'); ctx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+  setStage(''); setHint('按住说话 · 松开识别');
+  contBtn.classList.remove('on'); contBtn.textContent = '🎧 持续对话';
+  const vadEl = $('vadInfo'); if (vadEl) vadEl.textContent = '';
+}
+
+// ---- 连接检测 ----
+fetch('/api/health').then(r => r.json()).then(() => {
+  $('connDot').classList.add('on'); $('connText').textContent = '已连接';
+  btn.disabled = false; contBtn.disabled = false;
+}).catch(() => { $('connText').textContent = '后端未启动'; });
+
+// ---- 阶段状态 ----
+function setStage(html) { stage.innerHTML = html; }
+function setHint(t) { hint.textContent = t; }
+
+// ---- 波形可视化（录音时） ----
+function startWave(stream) {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = audioCtx.createMediaStreamSource(stream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 256; src.connect(analyser);
+  const ctx = waveCanvas.getContext('2d');
+  const data = new Uint8Array(analyser.fftSize / 2);
+  const draw = () => {
+    if (!analyser) return;
+    animId = requestAnimationFrame(draw);
+    analyser.getByteFrequencyData(data);
+    ctx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+    const bars = 24, w = waveCanvas.width / bars;
+    for (let i = 0; i < bars; i++) {
+      const v = data[i * 3] / 255;
+      const h = Math.max(2, v * waveCanvas.height * 0.85);
+      ctx.fillStyle = `rgba(52,211,153,${0.35 + v * 0.65})`;
+      ctx.fillRect(i * w + 2, (waveCanvas.height - h) / 2, w - 4, h);
+    }
+  };
+  draw();
+}
+function stopWave() {
+  if (animId) cancelAnimationFrame(animId);
+  animId = null; analyser = null;
+  const ctx = waveCanvas.getContext('2d');
+  ctx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+}
+
+// ---- 消息气泡 ----
+function addMsg(role, html) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role; div.innerHTML = html;
+  chat.appendChild(div); $('main').scrollTop = $('main').scrollHeight;
+  return div;
+}
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ---- 录音 ----
+// 关 AGC：自动增益会把远场背景人声放大到与近场语音同能量，抹平能量门限的物理基础
+// （保留降噪/回声消除，它们不改变增益关系）
+const MIC_OPTS = { audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: false } };
+async function startRecord() {
+  if (busy) return;
+  speechStartEpoch = Date.now();   // 按下=人开始说话（时延基准 t0）
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
+    startWave(stream);
+    mediaRecorder = new MediaRecorder(stream);
+    chunks = [];
+    mediaRecorder.ondataavailable = e => chunks.push(e.data);
+    mediaRecorder.onstop = async () => {
+      stopWave();
+      stream.getTracks().forEach(t => t.stop());
+      await sendAudio(await blobToWavBase64(new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' })));
+    };
+    mediaRecorder.start();
+    recording = true;
+    btn.classList.add('recording'); ripple.style.display = 'block';
+    micIcon.textContent = '⏹'; setStage('<span class="spinner"></span>聆听中…'); setHint('松开结束录音');
+  } catch (e) {
+    setStage('❌ 无法访问麦克风'); setHint('请在浏览器设置中允许麦克风权限');
+  }
+}
+function stopRecord() {
+  if (recording && mediaRecorder && mediaRecorder.state !== 'inactive') {
+    speechEndEpoch = Date.now();   // 松开=人说完话
+    mediaRecorder.stop();
+  }
+  recording = false;
+  btn.classList.remove('recording'); ripple.style.display = 'none';
+  micIcon.textContent = '🎤';
+}
+
+// ---- 浏览器录音 → 16k WAV base64 ----
+function pcmToWavBase64(out) {
+  // 16k Float32 PCM（-1~1）→ 16bit WAV base64（持续模式直采 / 按住模式解码后共用）
+  const pcm = new Int16Array(out.length);
+  for (let i = 0; i < out.length; i++) {
+    const s = Math.max(-1, Math.min(1, out[i]));
+    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+  const wav = new ArrayBuffer(44 + pcm.length * 2);
+  const dv = new DataView(wav);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); dv.setUint32(4, 36 + pcm.length * 2, true); ws(8, 'WAVE');
+  ws(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
+  dv.setUint16(22, 1, true); dv.setUint32(24, 16000, true);
+  dv.setUint32(28, 32000, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+  ws(36, 'data'); dv.setUint32(40, pcm.length * 2, true);
+  new Int16Array(wav, 44).set(pcm);
+  const bytes = new Uint8Array(wav);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+async function blobToWavBase64(blob) {
+  const buf = await blob.arrayBuffer();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const decoded = await ctx.decodeAudioData(buf);
+  ctx.close().catch(() => {});
+  const src = decoded.getChannelData(0);
+  const targetRate = 16000, ratio = decoded.sampleRate / targetRate;
+  const outLen = Math.floor(src.length / ratio);
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) out[i] = src[Math.min(src.length - 1, Math.floor(i * ratio))];
+  return pcmToWavBase64(out);
+}
+
+// ---- SSE 流式对话 ----
+function stopAllPlayback() {
+  // 新轮开始/打断：停止上一轮全部播放，清空队列
+  // （防多轮音频重叠、onended 链错乱、isReplying 残留卡死）
+  const stopped = Object.keys(playQueue);
+  Object.keys(playQueue).forEach(k => {
+    try { playQueue[k].pause(); playQueue[k].onended = null; } catch (e) {}
+  });
+  if (stopped.length) vlog('INFO', 'PLAY', '停止旧播放', { count: stopped.length });
+  playQueue = {};
+  isReplying = false;
+}
+async function sendAudio(b64) {
+  if (busy) return;   // 防重入（持续模式段与按住说话并发）
+  busy = true; btn.disabled = true; btn.classList.add('thinking');
+  micIcon.textContent = '⏳'; setHint('');
+  // b64 = 16k wav base64（持续模式直采组装 / 按住模式 blobToWavBase64 后传入）
+  vlog('INFO', 'SEND', '请求开始', { audioMs: Math.round(b64.length * 3 / 4 / 32) });
+
+  setStage('<span class="spinner"></span>上传音频…');
+  let userMsg = null, aiMsg = null, aiHtml = '';
+  metrics = { turn: ++turnId };   // 本轮新 metrics（done 后残留播放链写入的旧值不污染本轮）
+  tSendStart = performance.now();   // 请求发出时刻（上传+ASR 处理时延起点）
+  // 超时保护：慢通道异常/网络卡死时 30s 强制恢复（防 busy 永久占用导致后续说话全被丢弃）
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 30000);
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        audio_b64: b64, client_id: clientId,
+        speech_start_ms: speechStartEpoch,   // 人开始说话（epoch ms，server 按时延基准统计）
+        speech_end_ms: speechEndEpoch,       // 人说完话
+      }),
+      signal: ac.signal,
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const events = buf.split('\n\n'); buf = events.pop();
+      for (const ev of events) {
+        const line = ev.split('\n').find(l => l.startsWith('data:'));
+        if (!line) continue;
+        const d = JSON.parse(line.slice(5).trim());
+        handleEvent(d);
+      }
+    }
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      vlog('ERROR', 'SEND', '超时中断（30s）');
+      setStage('❌ 回复超时（30s），请重试');
+    } else {
+      vlog('ERROR', 'SEND', '请求失败', { err: String(e).slice(0, 120) });
+      setStage('❌ 请求失败: ' + e.message);
+    }
+    if (aiMsg) aiMsg.remove();
+  } finally {
+    clearTimeout(timer);
+  }
+  endBusy();
+
+  function handleEvent(d) {
+    switch (d.type) {
+      case 'stage':
+        setStage(`<span class="spinner"></span>${d.stage === 'asr' ? '识别中…' : d.stage === 'fast' ? '快通道思考中…' : d.stage === 'slow' ? '深度思考中…' : '合成回复语音…'}`);
+        break;
+      case 'asr_partial':
+        // ASR 实时增量（边说边出）
+        setStage('🎤 识别中…');
+        if (!userMsg) userMsg = addMsg('user', '');
+        userMsg.textContent = d.text + '…';
+        $('main').scrollTop = $('main').scrollHeight;
+        break;
+      case 'asr':
+        setStage('已识别');
+        metrics.asr = d.latency_ms;                       // ASR 处理时延（server 端）
+        metrics.asr_proc = performance.now() - tSendStart;  // 请求发出→ASR 定稿（含上传，覆盖'看不见的时延'）
+        metrics.asr_text = d.partial_first_ms;            // 人开始说话→出 ASR 文字（无 partial 时为 null）
+        metrics.asr_final = d.final_ms;                   // 人说完话→ASR 定稿
+        if (!userMsg) { userMsg = addMsg('user', ''); }
+        userMsg.textContent = d.text || '（未识别到语音）';
+        break;
+      case 'fast':
+        // 快路径 LLM 时延（承接语生成耗时，送本地 Ollama → 承接语完成）
+        metrics.llm_fast = d.latency_ms;
+        if (!aiMsg) aiMsg = addMsg('ai', '');
+        metrics.fast = d.latency_ms;
+        aiHtml += `<span class="tag"><span class="fast-tag">⚡ 承接语</span> · 本地 qwen3.5:4b-mlx</span><div class="fast-text">${escapeHtml(d.text)}</div>`;
+        aiMsg.innerHTML = aiHtml;
+        break;
+      case 'slow_first':
+        metrics.llm_slow = d.latency_ms;   // 慢路径 LLM 首字（送云端 → 首字）
+        metrics.silence = d.silence_ms;      // 人说完话→送 LLM（静音判定）
+        break;
+      case 'slow_delta':
+        if (!aiMsg) aiMsg = addMsg('ai', '');
+        aiHtml += escapeHtml(d.delta);
+        aiMsg.innerHTML = aiHtml + '<span class="caret"></span>';
+        $('main').scrollTop = $('main').scrollHeight;
+        break;
+      case 'tts_sentence':
+        // 句子音频入队 → 链式连续播放（句 idx 播完自动播下一句）
+        if (d.idx === 0) stopAllPlayback();   // 新轮承接语 → 停上一轮残留播放（barge-in 防重叠）
+        aiMsg.innerHTML = aiHtml;
+        setStage('🔊 播放回复…');
+        (metrics.tts = metrics.tts || []).push(d.latency_ms);
+        if (metrics.tts_comp == null) metrics.tts_comp = d.latency_ms;   // TTS 合成时延（收到文字→音频就绪）
+        if (metrics.tts_first == null) {
+          metrics.tts_first = Date.now() - speechEndEpoch;  // 人说完话→首个音频就绪（端到端）
+        }
+        const idx = d.idx;
+        const a = new Audio(d.url);
+        a.preload = 'auto';          // 到达即预下载（默认 metadata 只载头部，play() 时才下载→卡顿）
+        playQueue[idx] = a;
+        const prev = playQueue[idx - 1];
+        // play 成功才算在播（失败→解除抑制，防卡死导致后续段全被丢弃）
+        const playNow = () => {
+          if (metrics.tts_play == null && metrics.turn === turnId) {
+            metrics.tts_play = Date.now() - speechEndEpoch;   // 说完话→开始播放（感知响应时延）
+            vlog('INFO', 'PLAY', '首个音频播放', { idx, ts: Date.now(), speechEndEpoch, tts_play: metrics.tts_play });
+          }
+          return a.play().then(() => { isReplying = true; }).catch(() => { isReplying = false; });
+        };
+        // 前驱缺失或已播完（ended/播过暂停）→ 立即播；否则挂前驱 ended 接播。
+        // 修复竞态：慢句子晚到时承接语可能已播完，addEventListener 挂在已 ended 的
+        // Audio 上永不触发 → 之前慢通道有文字没声音。
+        if (!prev || prev.ended || (prev.paused && prev.currentTime > 0)) {
+          isReplying = true;   // 有音频要播 → 回声抑制生效
+          playNow();
+        } else {
+          isReplying = true;
+          prev.addEventListener('ended', playNow, { once: true });
+        }
+        a.onended = () => {
+          const next = playQueue[idx + 1];   // 后句若已到达且未播 → 直接接播
+          if (next && !next.ended && next.paused && next.currentTime === 0) next.play().catch(() => {});
+          const keys = Object.keys(playQueue).filter(k => playQueue[k]);
+          if (keys.length && keys.every(k => playQueue[k].ended)) isReplying = false;  // 全部播完
+          if (idx === Object.keys(playQueue).length - 1) setStage('');
+        };
+        break;
+      case 'done':
+        // 总计=说完话→开始播放（感知响应时延）；若 done 先于播放到达（承接语未播），
+        // 用 done 时刻兜底，播放开始时 playNow 会更新 tts_play（见 tts_sentence 分支）
+        if (metrics.tts_play == null) metrics.tts_play = Date.now() - speechEndEpoch;
+        metrics.total = metrics.tts_play;
+        vlog('INFO', 'EVT', 'done', { total_ms: d.total_ms, speech_end: speechEndEpoch, asr_proc: metrics.asr_proc, asr_text: metrics.asr_text, silence: metrics.silence, slow_first: metrics.slow_first, tts_comp: metrics.tts_comp, tts_play: metrics.tts_play });
+        const lat = document.createElement('span');
+        lat.className = 'lat';
+        lat.textContent = `⏱ 上传+ASR ${fmt(metrics.asr_proc)} · 定稿 ${fmt(metrics.asr_final)} · 判停 ${fmt(contJudgeMs || null)} · LLM快 ${fmt(metrics.llm_fast)} · LLM慢 ${fmt(metrics.llm_slow)} · TTS合成(收字→音频) ${fmt(metrics.tts_comp)} · 响应(说完→开始播) ${fmt(metrics.total)}`;
+        if (aiMsg) { aiMsg.appendChild(lat); }
+        else if (userMsg) { userMsg.appendChild(lat); }
+        // 注意：不在 done 重置 metrics——残留播放链（慢句 done 后播放）的 playNow
+        // 用 turn 校验（metrics.turn === turnId）防止污染下一轮；sendAudio 开头重建
+        setStage(''); setHint('按住说话 · 松开识别');
+        break;
+      case 'error':
+        setStage('❌ ' + (d.msg || '错误'));
+        setHint('请重试');
+        break;
+    }
+  }
+  function fmt(ms) { return ms == null ? '-' : (ms >= 1000 ? (ms/1000).toFixed(1) + 's' : ms + 'ms'); }
+  function endBusy() {
+    busy = false; btn.disabled = false; btn.classList.remove('thinking');
+    micIcon.textContent = '🎤'; setHint('按住说话 · 松开识别');
+  }
+}
+
+// ---- 事件绑定（按住说话） ----
+btn.addEventListener('mousedown', e => { e.preventDefault(); startRecord(); });
+btn.addEventListener('mouseup', stopRecord);
+contBtn.addEventListener('click', toggleCont);
+btn.addEventListener('mouseleave', stopRecord);
+btn.addEventListener('touchstart', e => { e.preventDefault(); startRecord(); }, { passive: false });
+btn.addEventListener('touchend', e => { e.preventDefault(); stopRecord(); }, { passive: false });
+</script>
+</body>
+</html>

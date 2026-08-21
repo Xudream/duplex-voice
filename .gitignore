@@ -1,0 +1,14 @@
+# Python 缓存
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 会话数据（对话内容，不提交）
+sessions.jsonl
+
+# 环境/密钥（走环境变量注入）
+.env
+*.local
+
+# 系统
+.DS_Store
