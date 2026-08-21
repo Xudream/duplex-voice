@@ -216,7 +216,8 @@ else:
 VAD_MODE = {"mode": VAD_JUDGE}   # 运行中可切换（前端开关）
 FUSION_MODE = {"mode": os.environ.get("FUSION_MODE", "fastslow")}   # fastslow | direct（运行中可切换）
 fusion: FusionStrategy = get_fusion_strategy(FUSION_MODE["mode"])   # 全局融合策略（可插拔）
-TTS_STREAM = os.environ.get("TTS_STREAM", "1") == "1"   # 流式 TTS（realtime WS 边合成边播；0=整段）
+TTS_STREAM = os.environ.get("TTS_STREAM", "1") == "1"   # 启动默认（流式）
+TTS_MODE = {"mode": "stream" if TTS_STREAM else "batch"}   # 运行中可切换：stream=承接语流式+慢句整段并行 / batch=全整段
 tts_stream = Qwen3TTSStream(HOST, KEY)   # 流式 TTS 实例（每句一个 WS 会话）
 
 
@@ -340,6 +341,22 @@ async def fusion_switch(req: FusionSwitchRequest):
 @app.get("/api/fusion_mode")
 async def fusion_mode():
     return {"mode": FUSION_MODE["mode"]}
+
+
+@app.post("/api/tts_switch")
+async def tts_switch(body: dict):
+    """动态切换 TTS 模式：stream（承接语流式+慢句整段并行）| batch（全整段），不重启。"""
+    mode = body.get("mode", "")
+    if mode not in ("stream", "batch"):
+        return JSONResponse({"error": "mode 必须是 stream 或 batch"}, status_code=400)
+    TTS_MODE["mode"] = mode
+    log.info("TTS_SWITCH mode=%s", mode)
+    return {"ok": True, "mode": mode}
+
+
+@app.get("/api/tts_mode")
+async def tts_mode():
+    return {"mode": TTS_MODE["mode"]}
 
 
 @app.post("/api/vad_switch")
@@ -498,24 +515,6 @@ async def chat(req: ChatRequest):
                     tts_t0 = {}
                     first_done = False
 
-                    async def stream_sentence(i: int, text: str):
-                        """流式合成句子：PCM 块入 audio_chunk 事件；完成入 audio_end；
-                        失败回退整段合成（tts_sentence_fb 事件）。"""
-                        try:
-                            first_ms = await tts_stream.synth(
-                                text, lambda pcm: slow_events.put_nowait(
-                                    ("audio_chunk", i, base64.b64encode(pcm).decode())))
-                            slow_events.put_nowait(("audio_end", i, first_ms))
-                        except Exception as e:
-                            log.error("STREAM_TTS_ERR cid=%s sent=%d err=%s → 回退整段",
-                                      req.client_id, i, str(e)[:80])
-                            try:
-                                u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, text)
-                                slow_events.put_nowait(("tts_sentence_fb", i, u, tts_ms, dl_ms))
-                            except Exception as e2:
-                                log.error("TTS_FB_ERR cid=%s sent=%d err=%s",
-                                          req.client_id, i, str(e2)[:80])
-
                     def flush():
                         nonlocal buf, sidx
                         s = buf.strip()
@@ -530,11 +529,10 @@ async def chat(req: ChatRequest):
                         i = sidx
                         sidx += 1
                         ts = time.time()
-                        if TTS_STREAM:
-                            pending[i] = asyncio.create_task(stream_sentence(i, s))
-                        else:
-                            pending[i] = asyncio.create_task(
-                                asyncio.to_thread(_local_tts, s))
+                        # 慢句一律整段并行合成（实测 realtime WS 合成 2.4x 慢于实时，
+                        # 长句流式播放会中间等块卡顿；整段 ~2.5s 就绪，承接语播完无缝接播）
+                        pending[i] = asyncio.create_task(
+                            asyncio.to_thread(_local_tts, s))
                         tts_t0[i] = ts
 
                     try:
@@ -556,12 +554,9 @@ async def chat(req: ChatRequest):
                         print(f"[slow] 失败: {e}")
                     for i in sorted(pending):
                         try:
-                            if TTS_STREAM:
-                                await pending[i]   # 流式：事件已入队（audio_chunk/end/fb）
-                            else:
-                                u, tts_ms, dl_ms = await pending[i]
-                                slow_events.put_nowait(
-                                    ("tts_sentence", i, u, int((time.time() - tts_t0[i]) * 1000), dl_ms))
+                            u, tts_ms, dl_ms = await pending[i]
+                            slow_events.put_nowait(
+                                ("tts_sentence", i, u, int((time.time() - tts_t0[i]) * 1000), dl_ms))
                         except Exception as e:
                             log.error("TTS_ERR cid=%s sentence=%d err=%s", req.client_id, i, e)
                     slow_events.put_nowait((("slow_done",)))
@@ -594,7 +589,7 @@ async def chat(req: ChatRequest):
                     # 与慢句并行流式下发（不阻塞——慢句块无需等承接语合成完）
                     if fast_text:
                         t0 = time.time()
-                        if TTS_STREAM:
+                        if TTS_MODE["mode"] == "stream":
 
                             async def _fast_stream(text, q):
                                 try:

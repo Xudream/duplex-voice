@@ -124,6 +124,7 @@
     <button class="cont-btn" id="contBtn" disabled>🎧 持续对话</button>
     <button class="cont-btn" id="vadBtn" disabled title="切换语义 VAD 实现（rule 规则 / omni 模型）">🧠 VAD: …</button>
     <button class="cont-btn" id="fusionBtn" disabled title="切换回复融合（快慢融合 / 慢回复直达）">🎙 融合: …</button>
+    <button class="cont-btn" id="ttsBtn" disabled title="切换 TTS（stream 流式 / batch 整段）">🎵 TTS: …</button>
     <div class="hint" id="hint">按住说话 · 松开识别</div>
   </div>
   <div class="vad-info" id="vadInfo"></div>
@@ -134,8 +135,9 @@
 const $ = id => document.getElementById(id);
 const btn = $('wakeBtn'), chat = $('chat'), stage = $('stage'), hint = $('hint');
 const micIcon = $('micIcon'), ripple = $('ripple'), waveCanvas = $('wave');
-const contBtn = $('contBtn'), vadBtn = $('vadBtn'), fusionBtn = $('fusionBtn');
+const contBtn = $('contBtn'), vadBtn = $('vadBtn'), fusionBtn = $('fusionBtn'), ttsBtn = $('ttsBtn');
 let vadMode = null;   // 当前语义 VAD 模式（rule | omni）
+let ttsMode = null;   // 当前 TTS 模式（stream | batch）
 
 // ---- 语义 VAD 行为注册表（可插拔：插入新 VAD 只需注册，不改行为代码）----
 // bargeIn: 'immediate' = 播放中检测语音立即打断（声学 VAD 原行为）
@@ -495,6 +497,12 @@ fetch('/api/health').then(r => r.json()).then(() => {
     fusionBtn.textContent = '🎙 融合: ' + (d.mode === 'direct' ? '直达' : '快慢');
     fusionBtn.disabled = false;
   }).catch(() => { fusionBtn.textContent = '🎙 融合: -'; });
+  // TTS 开关：获取当前模式并启用（stream 流式 | batch 整段）
+  fetch('/api/tts_mode').then(r => r.json()).then(d => {
+    ttsMode = d.mode;
+    ttsBtn.textContent = '🎵 TTS: ' + (d.mode === 'stream' ? '流式' : '整段');
+    ttsBtn.disabled = false;
+  }).catch(() => { ttsBtn.textContent = '🎵 TTS: -'; });
 }).catch(() => { $('connText').textContent = '后端未启动'; });
 
 // 语义 VAD 动态切换（rule 规则 ↔ omni 模型，不重启）
@@ -541,6 +549,29 @@ fusionBtn.addEventListener('click', async () => {
     setStage('❌ 融合切换失败');
   } finally {
     fusionBtn.disabled = false;
+  }
+});
+
+// TTS 动态切换（stream 流式 ↔ batch 整段，不重启）
+ttsBtn.addEventListener('click', async () => {
+  const cur = ttsMode || (ttsBtn.textContent.includes('整段') ? 'batch' : 'stream');
+  const next = cur === 'stream' ? 'batch' : 'stream';
+  ttsBtn.disabled = true;
+  try {
+    const resp = await fetch('/api/tts_switch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: next }),
+    });
+    const d = await resp.json();
+    if (!resp.ok || !d.ok) throw new Error(d.error || d.msg || 'HTTP ' + resp.status);
+    ttsMode = d.mode;
+    ttsBtn.textContent = '🎵 TTS: ' + (d.mode === 'stream' ? '流式' : '整段');
+    setStage('🎵 TTS 切换: ' + (d.mode === 'stream' ? '流式（承接语边合成边播）' : '整段（全部合成完再播）'));
+    vlog('INFO', 'TTS_SWITCH', '切换', { mode: d.mode });
+  } catch (e) {
+    setStage('❌ TTS 切换失败');
+  } finally {
+    ttsBtn.disabled = false;
   }
 });
 
