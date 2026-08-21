@@ -136,6 +136,18 @@ const micIcon = $('micIcon'), ripple = $('ripple'), waveCanvas = $('wave');
 const contBtn = $('contBtn'), vadBtn = $('vadBtn');
 let vadMode = null;   // 当前语义 VAD 模式（rule | omni）
 
+// ---- 语义 VAD 行为注册表（可插拔：插入新 VAD 只需注册，不改行为代码）----
+// bargeIn: 'immediate' = 播放中检测语音立即打断（声学 VAD 原行为）
+//          'semantic'  = 语义确认后才打断（backchannel 应声不砍播放）
+// silenceMs: 播放中插话的判停时长（semantic 模式用短判停快速发送等判断）
+const VAD_BEHAVIOR = {
+  rule: { bargeIn: 'immediate', silenceMs: 800 },   // 声学 VAD
+  omni: { bargeIn: 'semantic', silenceMs: 300 },    // 语义 VAD（Omni prompt 引导）
+  // 后续插入 SoulX 等：soulx: { bargeIn: 'semantic', silenceMs: 200 },
+};
+// null/未知模式 → rule 保守行为（页面加载中、未注册的 VAD）
+const vadBehavior = () => VAD_BEHAVIOR[vadMode] || VAD_BEHAVIOR.rule;
+
 let mediaRecorder = null, chunks = [], recording = false, busy = false;
 let audioCtx = null, analyser = null, animId = null;
 let playQueue = {};   // 句子音频队列（idx → Audio）
@@ -358,9 +370,9 @@ async function contLoop() {
       contVoiceMs = 0; contLowVoteMs = 0;
       if (contVoice) {
         contSilenceMs += dt;
-        // 判停：全静音 800ms（正常说完）；语义 VAD 模式播放中插话 300ms 短判停
-        // （声学 VAD 模式保持 800ms——打断在 flush 时立即执行，无需短判停）
-        if (contSilenceMs >= ((isReplying && vadMode === 'omni') ? CONT_SILENCE_BARGE_MS : CONT_SILENCE_MS)) {
+        // 判停：正常 800ms；播放中插话按 VAD 行为注册表
+        // （semantic → 短判停 300ms 快速发送等语义判断；immediate → 800ms，打断已在 flush 执行）
+        if (contSilenceMs >= (isReplying ? vadBehavior().silenceMs : CONT_SILENCE_MS)) {
           contVoice = false; contSilenceMs = 0;
           contCoolUntil = Date.now() + 2000;   // 冷却：防环境音判停后立即再触发
           contJudgeMs = Date.now() - contLastSpeechTs;   // 判停时长：语音结束→确认说完（显示'判停'）
@@ -433,13 +445,12 @@ async function flushContSegment() {
     return;
   }
   if (isReplying) {
-    if (vadMode === 'omni') {
-      // 语义 VAD 模式：不立即打断（backchannel 应声不该砍播放）——先发送，
-      // 语义确认 complete/barge_in 后才停播（vad_state 事件处理），
-      // backchannel/noise/echo 继续播（无感）
+    if (vadBehavior().bargeIn === 'semantic') {
+      // 语义 VAD：不立即打断（backchannel 应声不该砍播放）——先发送，
+      // 语义确认 complete/barge_in 后才停播（vad_state 事件处理）
       vlog('INFO', 'FLUSH', '播放中语音：发送待语义判断', { frames: pcm.length });
     } else {
-      // 声学 VAD 模式（rule）：保持原 barge-in 行为——立即打断
+      // 声学 VAD（rule 默认）：原 barge-in 行为——立即打断
       vlog('INFO', 'FLUSH', '插话打断播放（barge-in）', { frames: pcm.length });
       stopAllPlayback();
     }
@@ -794,10 +805,11 @@ async function sendAudio(b64) {
             `<span class="tag">🧠 语义VAD(${d.vad}): ${d.state}</span>`);
         }
         setStage('🧠 语义VAD(' + d.vad + '): ' + d.state);
-        // 播放中插话的打断决策（仅语义 VAD 模式：语义确认后才打断）：
+        // 播放中插话的打断决策（semantic 行为才在此打断——语义确认后执行）：
         // complete/barge_in → 停播接管；backchannel/noise/echo/reject → 继续播（无感）
-        // 声学 VAD 模式（rule）不在此打断——barge-in 已在 flushContSegment 立即执行
-        if (vadMode === 'omni' && (d.state === 'complete' || d.state === 'barge_in')) {
+        // immediate 行为（rule 默认）不在此打断——barge-in 已在 flushContSegment 立即执行
+        if (vadBehavior().bargeIn === 'semantic'
+            && (d.state === 'complete' || d.state === 'barge_in')) {
           if (isReplying) {
             vlog('INFO', 'PLAY', '语义确认打断', { state: d.state });
             stopAllPlayback();
