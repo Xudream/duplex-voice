@@ -661,6 +661,60 @@ async function blobToWavBase64(blob) {
 }
 
 // ---- SSE 流式对话 ----
+// ---- 流式 TTS 播放器（Web Audio：PCM 块边收边播，24kHz 16bit mono）----
+let actx = null;
+let streamStates = {};     // idx → {chunks:[], done, playing, sources:[]}
+let streamFinished = {};   // idx → bool（句播完标记，句间顺序用）
+function getAudioCtx() {
+  if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+  if (actx.state === 'suspended') actx.resume();
+  return actx;
+}
+function b64ToPcm(b64) {
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  const dv = new DataView(u8.buffer);
+  const n = u8.length >> 1;
+  const f32 = new Float32Array(n);
+  for (let i = 0; i < n; i++) f32[i] = dv.getInt16(i << 1, true) / 32768;
+  return f32;
+}
+function pumpStream(idx) {
+  const st = streamStates[idx];
+  if (!st || st.playing || !st.chunks.length) return;
+  if (idx > 0 && !streamFinished[idx - 1]) return;   // 前句未完等接播
+  st.playing = true;
+  const pcm = st.chunks.shift();
+  const ctx = getAudioCtx();
+  const buf = ctx.createBuffer(1, pcm.length, 24000);
+  buf.getChannelData(0).set(pcm);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(ctx.destination);
+  if (metrics.tts_play == null && metrics.turn === turnId) {
+    metrics.tts_play = Date.now() - sendEndEpoch;   // 说完→首个 PCM 块开始播放（流式响应）
+    vlog('INFO', 'PLAY', '流式首块播放', { idx, ts: Date.now(), tts_play: metrics.tts_play });
+  }
+  src.onended = () => {
+    st.playing = false;
+    st.sources = st.sources.filter(s => s !== src);
+    if (st.chunks.length) pumpStream(idx);
+    else if (st.done) finishStream(idx);
+  };
+  st.sources.push(src);
+  src.start();
+  isReplying = true;
+}
+function finishStream(idx) {
+  streamFinished[idx] = true;
+  const next = idx + 1;
+  if (streamStates[next] && !streamFinished[next]) pumpStream(next);   // 句间接播
+  if (Object.keys(streamStates).every(i => streamFinished[i])) {
+    isReplying = false;   // 全部流式句播完
+    if (playQueue && Object.keys(playQueue).length === 0) setStage('');
+  }
+}
 function stopAllPlayback() {
   // 新轮开始/打断：停止上一轮全部播放，清空队列
   // （防多轮音频重叠、onended 链错乱、isReplying 残留卡死）
@@ -670,6 +724,12 @@ function stopAllPlayback() {
   });
   if (stopped.length) vlog('INFO', 'PLAY', '停止旧播放', { count: stopped.length });
   playQueue = {};
+  // 流式播放源全部停止
+  Object.values(streamStates).forEach(st => {
+    st.sources.forEach(s => { try { s.stop(); s.onended = null; } catch (e) {} });
+    st.sources = []; st.playing = false;
+  });
+  streamStates = {}; streamFinished = {};
   isReplying = false;
 }
 async function sendAudio(b64) {
@@ -767,6 +827,24 @@ async function sendAudio(b64) {
         aiHtml += escapeHtml(d.delta);
         aiMsg.innerHTML = aiHtml + '<span class="caret"></span>';
         $('main').scrollTop = $('main').scrollHeight;
+        break;
+      case 'audio_chunk':
+        // 流式 TTS：PCM 块（24kHz 16bit mono base64）→ Web Audio 边收边播
+        if (metrics.tts_first == null) metrics.tts_first = Date.now() - speechEndEpoch;
+        setStage('🔊 播放回复…');
+        if (!streamStates[d.idx]) streamStates[d.idx] = { chunks: [], done: false, playing: false, sources: [] };
+        streamStates[d.idx].chunks.push(b64ToPcm(d.b64));
+        pumpStream(d.idx);
+        break;
+      case 'audio_end':
+        // 句子流式完成（first_ms=文本→首个 PCM 块时延）
+        if (d.first_ms != null && metrics.tts_comp == null) metrics.tts_comp = d.first_ms;
+        if (streamStates[d.idx]) {
+          streamStates[d.idx].done = true;
+          if (!streamStates[d.idx].chunks.length) finishStream(d.idx);   // 无块直接完成
+        } else {
+          streamFinished[d.idx] = true;
+        }
         break;
       case 'tts_sentence':
         // 句子音频入队 → 链式连续播放（句 idx 播完自动播下一句）
