@@ -1,68 +1,85 @@
-# duplex-voice · 级联全双工语音交互系统（第一版实现 v0.1）
+# duplex-voice · 快慢融合语音助手（Web 样机）
 
-> 设计依据：`../级联全双工语音交互系统-软件设计.md`（v2.1）
-> 技术栈：Silero VAD v6 + Qwen3-ASR/LLM/TTS（流式级联），两档能力（rule 半双工缺省 / semantic 全双工 P1）
+浏览器语音助手样机：**快慢融合**（本地 Ollama 承接语 + 云端大模型完整回复）+ **持续对话**（免按键，VAD 自动切段）+ **句子级 TTS 链式播放** + **barge-in 打断** + **全链路时延指标与日志**。
+
+> 软件设计文档：[docs/软件设计.md](docs/软件设计.md)（原理 + 流程图 + 可指导开发）
+
+## 界面截图
+
+**主界面**（持续对话模式：波形横条 + 圆形按钮 + 状态提示）：
+
+![主界面](assets/screenshot-main.png)
+
+**对话过程**（快慢融合回复 + 分阶段时延行）：
+
+![对话过程](assets/screenshot-chat.png)
+
+## 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| 🎤 持续对话 | 一次唤醒多轮，免按键；Silero VAD 自动切段（能量门限 + 投票滞回 + 三重判停） |
+| ⚡ 快慢融合 | 本地 qwen3.5:4b-mlx 先出 8-15 字过渡语（~1s 内出声），云端 qwen3.5-27b 生成完整回复无缝接播 |
+| 🔗 无缝衔接 | 首句剥离（`_strip_leading_filler`）防内容重复；慢首句 ≤15 字压缩 TTS 合成时间防空洞 |
+| 🗣 barge-in | 播放中说话立即打断 AI 回复并接管（耳机场景无回声误杀；回声由 server `_is_tts_echo` 兜底） |
+| ⏱ 时延指标 | 上传+ASR / 定稿 / 判停 / LLM快 / LLM慢 / TTS合成 / 响应(说完→开始播) 分阶段统计 |
+| 📊 全链路日志 | server `[voice]` 阶段日志 + 前端 vlog 自动上报（/api/log），问题定位靠数据不靠猜 |
+
+## 快速开始
+
+```bash
+# 依赖（服务端）
+pip install fastapi uvicorn httpx
+
+# 启动（DashScope API Key 从环境变量注入）
+cd web
+export DASHSCOPE_API_KEY=xxx
+python3 server.py          # 端口 8787，日志 tee 到 /tmp/voice_web.log
+
+# 打开浏览器
+open http://127.0.0.1:8787/
+```
+
+前置服务：
+
+- **Ollama**（快通道）：`qwen3.5:4b-mlx`，`http://127.0.0.1:11434`
+- **DashScope MaaS**（慢通道）：`qwen3.5-27b`（OpenAI 兼容端点）+ fun-asr 流式 ASR + Cherry TTS
+
+## 时延指标（实测 2026-08-20）
+
+```
+⏱ 上传+ASR 489ms · 定稿 503ms · 判停 800ms · LLM快 534ms · LLM慢 720ms · TTS合成 914ms · 响应(说完→开始播) 2.5s
+```
+
+- **响应** = 人说完（判停）→ 首个音频开始播放（感知时延，目标 2-3s）
+- 判停 800ms：中文口语停顿保护（500ms 会抢答）
+- 慢通道 qwen3.5-27b：实测首字 454ms 稳定（qwen3.6-27b 冷实例 13s、qwen3.7-flash 5.1s 波动，均弃用）
 
 ## 结构
 
 ```
-duplex_voice/
-├── main.py            # 装配 + 入口（--text 文本模式 / 默认麦克风）
-├── events.py          # 事件信封（seq/ts/trace_id）+ 高优先级通道
-├── config.py          # 配置（config.yaml 加载）
-├── audio/             # 采集(T1) / 播放(T3) / pre-roll 环形缓冲(采集侧)
-├── vad/               # VadJudge 接缝：RuleVadJudge(Silero双实例+双钳制) / Semantic(占位)
-├── adapter/           # 模型适配器：ASR/LLM/TTS Provider + 注册表（mock/qwen3）
-├── fsm/               # DuplexFSM：四态+子状态 / 转移表 / 定时器 / 打断裁决
-└── session.py         # 会话管理 + JSONL 落盘
-tests/                 # 17 个测试（pre-roll/双钳制/FSM/冒烟）
-```
-
-## 安装
-
-```bash
-pip install -r requirements.txt
-```
-
-## 运行
-
-```bash
-# 文本驱动模式（无麦克风，CI/验证）
-python3 -m duplex_voice.main --text
-
-# 麦克风模式（默认 mock 模型，跑通闭环）
-python3 -m duplex_voice.main
-
-# 接入真实模型（改 config.yaml）
-#   model.llm_provider: openai  + llm_api_key（LLM 即可真）
-#   model.asr_provider / tts_provider: qwen3（需部署对应服务，协议见设计 §6）
+duplex-voice/
+├── web/
+│   ├── server.py          # FastAPI：ASR / 快慢融合 / TTS / SSE / 过滤 / 日志
+│   ├── index.html         # 前端单文件：VAD 管道 / 播放链 / 时延统计 / vlog
+│   └── vendor/            # onnxruntime-web + silero_vad.onnx
+├── duplex_voice/          # Python 包（桌面版协议层，设计 v2.1 依据）
+├── tests/                 # pytest 23 个测试
+└── docs/软件设计.md       # 软件设计文档（原理 + 流程图）
 ```
 
 ## 测试
 
 ```bash
-python3 -m pytest tests/ -v
+python3 -m pytest tests/ -q    # 23 passed
 ```
 
-## 配置速查（config.yaml）
+## 关键参数（调参入口，详见设计文档 §9）
 
-| 键 | 默认 | 说明 |
-|----|------|------|
-| vad.judge | rule | rule=半双工（缺省）/ semantic=全双工（P1 插上） |
-| vad.min_silence_ms | 500 | 判停（250-1250 调档） |
-| vad.pre_roll_ms | 1200 | 打断回滚（采集侧 AEC 后） |
-| model.asr_provider | mock | mock / qwen3 |
-| model.llm_provider | mock | mock / openai / qwen3 |
-| model.tts_provider | mock | mock / qwen3 |
-
-## 状态机（软件设计 §2.4）
-
-四态 LISTEN/THINK/SPEAK/YIELD + 子状态（voicing/finalizing/post_wait…）；
-声学打断（takeover_noise）= rule 档基础能力：双钳制 + 窗口 80% + pre-roll 1.2s 回滚。
-
-## 已知边界（P0 第一版）
-
-- AEC 为占位（aec_enabled=false，真 AEC P1）；打断检测依赖双钳制阈值
-- Silero 在 Python 3.14 下 torch.jit 不可用 → 自动回退能量+过零率判定（生产建议 Python 3.11/3.12 或 ONNX）
-- SemanticVadJudge 为接口占位（8 状态 token 模型训练后接入）
-- Qwen3-ASR/TTS 协议以官方发布为准（§12 风险 1）
+| 参数 | 值 | 影响 |
+|------|-----|------|
+| `CONT_SILENCE_MS` | 800 | 静音判停（抢答/响应时延权衡） |
+| `CONT_VOTE_MIN/EXIT` | 7 / 5 | 投票滞回（背景人声 vs 句中停顿） |
+| `ENERGY_RATIO` | 4.0 | 帧能量门限（噪声底倍数） |
+| `ENERGY_FLOOR_SEG` | 0.012 | 段级能量下限（背景人声过滤） |
+| `_is_tts_echo` 阈值 | 0.7 | 回声过滤（真回声 0.8+，重复指令 0.4-0.5） |
