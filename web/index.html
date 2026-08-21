@@ -145,8 +145,10 @@ let ttsMode = null;   // 当前 TTS 模式（stream | batch）
 // silenceMs: 播放中插话的判停时长（semantic 模式用短判停快速发送等判断）
 const VAD_BEHAVIOR = {
   rule: { bargeIn: 'immediate', silenceMs: 800 },   // 声学 VAD
-  omni: { bargeIn: 'semantic', silenceMs: 300 },    // 语义 VAD（Omni prompt 引导）
-  // 后续插入 SoulX 等：soulx: { bargeIn: 'semantic', silenceMs: 200 },
+  omni: { bargeIn: 'semantic', silenceMs: 800 },    // 语义 VAD：判停 800ms——300ms 会把句中自然停顿
+                                                    // 当说完切半截话（实测播放期段仅 400-800ms → 碎片
+                                                    // → noise/incomplete 丢弃 = '播放时说话难识别'）
+  // 后续插入 SoulX 等：soulx: { bargeIn: 'semantic', silenceMs: 800 },
 };
 // null/未知模式 → rule 保守行为（页面加载中、未注册的 VAD）
 const vadBehavior = () => VAD_BEHAVIOR[vadMode] || VAD_BEHAVIOR.rule;
@@ -209,7 +211,6 @@ let contVadQueue = [];         // 待推理的 512 帧队列（rAF 消费）
 const SILERO_THRESHOLD = 0.5;  // 与桌面 RuleVadJudge 阈值一致
 const CONT_MIN_SPEECH_MS = 250;  // 与桌面 min_speech_ms 一致
 const CONT_SILENCE_MS = 800;     // 判停：停顿 ≥800ms 视为说完（500ms 会抢答——中文口语停顿常超 500ms）
-const CONT_SILENCE_BARGE_MS = 300;  // 播放中插话短判停（刻意行为，快速发送等语义判断）
 const CONT_SILERO_SR = 16000;
 // 抗背景人声/噪声双钳制（对齐桌面 RuleVadJudge：窗口 10 帧 80% + 能量门限）
 const CONT_VOTE_WIN = 10;        // 投票窗口（帧）
