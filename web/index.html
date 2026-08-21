@@ -785,11 +785,12 @@ async function sendAudio(b64) {
         const prev = playQueue[idx - 1];
         // play 成功才算在播（失败→解除抑制，防卡死导致后续段全被丢弃）
         const playNow = () => {
+          vlog('INFO', 'PLAY2', 'playNow 调用', { idx, ts: Date.now(), tts_play: metrics.tts_play, turn: metrics.turn, turnId, sendEndEpoch, speechEndEpoch });
           if (metrics.tts_play == null && metrics.turn === turnId) {
             metrics.tts_play = Date.now() - sendEndEpoch;   // 说完话→开始播放（用发送时快照，防全局被覆盖）
             vlog('INFO', 'PLAY', '首个音频播放', { idx, ts: Date.now(), speechEndEpoch, tts_play: metrics.tts_play });
           }
-          return a.play().then(() => { isReplying = true; }).catch(() => { isReplying = false; });
+          return a.play().then(() => { isReplying = true; vlog('INFO', 'PLAY2', 'play() 成功', { idx, ts: Date.now() }); }).catch((e) => { isReplying = false; vlog('WARN', 'PLAY2', 'play() 失败', { idx, err: String(e).slice(0, 80) }); });
         };
         // 前驱缺失或已播完（ended/播过暂停）→ 立即播；否则挂前驱 ended 接播。
         // 修复竞态：慢句子晚到时承接语可能已播完，addEventListener 挂在已 ended 的

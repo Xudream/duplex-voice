@@ -40,6 +40,7 @@ from duplex_voice.adapter.tts import Qwen3TTSProvider
 
 HOST = "llm-5ienv5iasbci5bt7.cn-beijing.maas.aliyuncs.com"
 WEB_DIR = Path(__file__).resolve().parent
+TTS_CACHE = WEB_DIR / "tts_cache"   # 本地 TTS 音频缓存（server 代下载，前端播放不走公网）
 ASR_MODEL = "qwen3-asr-flash"
 SLOW_MODEL = "qwen3.5-27b"        # 实测 2026-08-20：首 token 454ms（稳定 0.42-0.55s）；qwen3.7-flash 同空间首 token 5.1s 平均（3.7-7.1s 波动）→ 换 27b
 FAST_MODEL = "qwen3.5:4b-mlx"       # Ollama 本地
@@ -228,6 +229,24 @@ def _is_noise_text(text: str) -> bool:
     return False
 
 
+def _local_tts(text: str, voice: str = "Cherry") -> str:
+    """合成 TTS 并转本地缓存（下载 DashScope 云端 URL → 本地文件）。
+
+    前端播放本地 URL（毫秒级）——响应时延不含公网下载抖动（实测云端
+    URL 下载可波动 3s+，会虚高'响应(说完→开始播)'）。
+    同文本同音色复用缓存。
+    """
+    import hashlib
+    import urllib.request as _urlreq
+    name = hashlib.md5((text + voice).encode()).hexdigest()[:16] + ".wav"
+    local = TTS_CACHE / name
+    if not local.exists():
+        remote = tts._synthesize_url(text, voice)
+        with _urlreq.urlopen(remote, timeout=30) as r:
+            local.write_bytes(r.read())
+    return f"/tts_cache/{name}"
+
+
 def _strip_leading_filler(text: str) -> str:
     """剥离慢回复首句的开头客套（防与快通道承接语重复割裂）：
     '好的，''嗯，''行，''没问题，''收到，'等（'好的方面'这类无标点的不剥）。
@@ -284,6 +303,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="语音助手 Web 页面", lifespan=lifespan)
+
+# 本地 TTS 音频缓存静态服务（前端播放不走公网——下载时延不计入响应）
+app.mount("/tts_cache", StaticFiles(directory=TTS_CACHE), name="tts_cache")
 
 
 class VadSwitchRequest(BaseModel):
@@ -482,7 +504,7 @@ async def chat(req: ChatRequest):
                         sidx += 1
                         ts = time.time()
                         pending[i] = asyncio.create_task(
-                            asyncio.to_thread(tts._synthesize_url, s, "Cherry"))
+                            asyncio.to_thread(_local_tts, s))
                         tts_t0[i] = ts
 
                     try:
@@ -538,7 +560,7 @@ async def chat(req: ChatRequest):
                     # 承接语立即合成 TTS → idx=0 最先入队播放（慢通道句子接在其后）
                     if fast_text:
                         t0 = time.time()
-                        u = await asyncio.to_thread(tts._synthesize_url, fast_text, "Cherry")
+                        u = await asyncio.to_thread(_local_tts, fast_text)
                         fast_tts_ms = int((time.time() - t0) * 1000)
                         fast_tts_url = u
                         log.info("TTS cid=%s idx=0 fast ms=%d", req.client_id, fast_tts_ms)
@@ -579,7 +601,7 @@ async def chat(req: ChatRequest):
             if not fast_tts_url and not got_slow_tts and reply_for_tts:
                 try:
                     t0 = time.time()
-                    u = tts._synthesize_url(reply_for_tts, "Cherry")
+                    u = _local_tts(reply_for_tts)
                     tts_ms = int((time.time() - t0) * 1000)
                     log.info("TTS cid=%s fallback ms=%d", req.client_id, tts_ms)
                     yield 'data: {"type":"tts_sentence","idx":0,"url":%s,"latency_ms":%d}\n\n' % (json.dumps(u), tts_ms)
