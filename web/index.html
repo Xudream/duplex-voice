@@ -123,6 +123,7 @@
   <div class="cont-row">
     <button class="cont-btn" id="contBtn" disabled>🎧 持续对话</button>
     <button class="cont-btn" id="vadBtn" disabled title="切换语义 VAD 实现（rule 规则 / omni 模型）">🧠 VAD: …</button>
+    <button class="cont-btn" id="fusionBtn" disabled title="切换回复融合（快慢融合 / 慢回复直达）">🎙 融合: …</button>
     <div class="hint" id="hint">按住说话 · 松开识别</div>
   </div>
   <div class="vad-info" id="vadInfo"></div>
@@ -133,7 +134,7 @@
 const $ = id => document.getElementById(id);
 const btn = $('wakeBtn'), chat = $('chat'), stage = $('stage'), hint = $('hint');
 const micIcon = $('micIcon'), ripple = $('ripple'), waveCanvas = $('wave');
-const contBtn = $('contBtn'), vadBtn = $('vadBtn');
+const contBtn = $('contBtn'), vadBtn = $('vadBtn'), fusionBtn = $('fusionBtn');
 let vadMode = null;   // 当前语义 VAD 模式（rule | omni）
 
 // ---- 语义 VAD 行为注册表（可插拔：插入新 VAD 只需注册，不改行为代码）----
@@ -488,6 +489,11 @@ fetch('/api/health').then(r => r.json()).then(() => {
     vadBtn.textContent = '🧠 VAD: ' + vadMode;
     vadBtn.disabled = false;
   }).catch(() => { vadBtn.textContent = '🧠 VAD: -'; });
+  // 回复融合开关：获取当前模式并启用（快慢融合 | 慢回复直达）
+  fetch('/api/fusion_mode').then(r => r.json()).then(d => {
+    fusionBtn.textContent = '🎙 融合: ' + (d.mode === 'direct' ? '直达' : '快慢');
+    fusionBtn.disabled = false;
+  }).catch(() => { fusionBtn.textContent = '🎙 融合: -'; });
 }).catch(() => { $('connText').textContent = '后端未启动'; });
 
 // 语义 VAD 动态切换（rule 规则 ↔ omni 模型，不重启）
@@ -512,6 +518,28 @@ vadBtn.addEventListener('click', async () => {
     setStage('❌ VAD 切换失败');
   } finally {
     vadBtn.disabled = false;
+  }
+});
+
+// 回复融合动态切换（快慢融合 ↔ 慢回复直达，不重启）
+fusionBtn.addEventListener('click', async () => {
+  const cur = fusionBtn.textContent.includes('直达') ? 'direct' : 'fastslow';
+  const next = cur === 'fastslow' ? 'direct' : 'fastslow';
+  fusionBtn.disabled = true;
+  try {
+    const resp = await fetch('/api/fusion_switch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: next }),
+    });
+    const d = await resp.json();
+    if (!resp.ok || !d.ok) throw new Error(d.msg || 'HTTP ' + resp.status);
+    fusionBtn.textContent = '🎙 融合: ' + (d.mode === 'direct' ? '直达' : '快慢');
+    setStage('🎙 融合切换: ' + (d.mode === 'direct' ? '慢回复直达' : '快慢融合'));
+    vlog('INFO', 'FUSION', '切换', { mode: d.mode });
+  } catch (e) {
+    setStage('❌ 融合切换失败');
+  } finally {
+    fusionBtn.disabled = false;
   }
 });
 

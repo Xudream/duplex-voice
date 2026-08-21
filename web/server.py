@@ -70,6 +70,7 @@ VAD_JUDGE = os.environ.get("SEMANTIC_VAD", "rule")   # 或从 config.yaml vad.ju
 
 
 from duplex_voice.fsm.barge_decision import BargeDecisionFSM, VadState
+from duplex_voice.adapter.fusion import FusionStrategy, get_fusion_strategy
 
 
 class VadJudge:
@@ -211,6 +212,8 @@ else:
     print("✅ 语义 VAD = Rule（默认）——SEMANTIC_VAD=omni 切换 Omni 验证")
 
 VAD_MODE = {"mode": VAD_JUDGE}   # 运行中可切换（前端开关）
+FUSION_MODE = {"mode": os.environ.get("FUSION_MODE", "fastslow")}   # fastslow | direct（运行中可切换）
+fusion: FusionStrategy = get_fusion_strategy(FUSION_MODE["mode"])   # 全局融合策略（可插拔）
 
 
 def _is_noise_text(text: str) -> bool:
@@ -285,6 +288,27 @@ app = FastAPI(title="语音助手 Web 页面", lifespan=lifespan)
 
 class VadSwitchRequest(BaseModel):
     mode: str   # rule | omni
+
+
+class FusionSwitchRequest(BaseModel):
+    mode: str   # fastslow | direct
+
+
+@app.post("/api/fusion_switch")
+async def fusion_switch(req: FusionSwitchRequest):
+    """动态切换回复融合策略（可插拔：快慢融合 | 慢回复直达，不重启）。"""
+    if req.mode not in ("fastslow", "direct"):
+        return JSONResponse({"ok": False, "msg": "mode 须为 fastslow|direct"}, status_code=400)
+    global fusion
+    fusion = get_fusion_strategy(req.mode)
+    FUSION_MODE["mode"] = req.mode
+    log.info("FUSION_SWITCH mode=%s", req.mode)
+    return {"ok": True, "mode": req.mode}
+
+
+@app.get("/api/fusion_mode")
+async def fusion_mode():
+    return {"mode": FUSION_MODE["mode"]}
 
 
 @app.post("/api/vad_switch")
@@ -427,11 +451,7 @@ async def chat(req: ChatRequest):
                 try:
                     history = HISTORIES.get(req.client_id, [])[-10:]  # 最近 10 轮
                     messages = [{"role": "system",
-                                 "content": "你是智能家居语音助手，回复简洁口语化，不超过两句话。"
-                                 "注意：AI 已先用简短的过渡语（如'好的，马上为您处理'）回应过用户，你回复时"
-                                 "不要再说'好的''嗯''没问题'等开头客套，直接给出具体内容或结果。"
-                                 "要求首句尽量简短（15字内）直接给结果（首句短→TTS 合成快，避免播放停顿），"
-                                 "细节放第二句。"}]
+                                 "content": fusion.slow_system_prompt()}]
                     messages += history
                     messages.append({"role": "user", "content": asr_text})
                     t0 = time.time()
@@ -495,9 +515,10 @@ async def chat(req: ChatRequest):
             slow_task = asyncio.create_task(run_slow())
 
             # 2. 快通道承接语（本地 4b）→ 生成完立即 TTS 合成播放（不等慢通道）
+            #    可插拔：direct 策略（慢回复直达）不启动快通道——两套机制独立
             fast_text = ""
             fast_tts_url = None
-            if FusionPolicy.should_speak(asr_text):
+            if fusion.should_fast(asr_text):
                 yield 'data: {"type":"stage","stage":"fast"}\n\n'
                 t0 = time.time()
                 try:
