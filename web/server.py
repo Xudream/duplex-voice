@@ -178,13 +178,15 @@ async def _post_json(url: str, headers: dict, json: dict, timeout: float = 8.0) 
         return r.json()
 
 
-# 实例化（可插拔：SEMANTIC_VAD=omni 切换）
+# 实例化（可插拔：SEMANTIC_VAD=omni 切换；运行中可由前端 /api/vad_switch 动态切换）
 if VAD_JUDGE == "omni":
     vad_judge: VadJudge = OmniVadJudge(host=HOST, api_key=KEY)
     print(f"✅ 语义 VAD = Omni（{OmniVadJudge.MODEL}）——架构验证模式")
 else:
     vad_judge = RuleVadJudge()
     print("✅ 语义 VAD = Rule（默认）——SEMANTIC_VAD=omni 切换 Omni 验证")
+
+VAD_MODE = {"mode": VAD_JUDGE}   # 运行中可切换（前端开关）
 
 
 def _is_noise_text(text: str) -> bool:
@@ -253,6 +255,27 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="语音助手 Web 页面", lifespan=lifespan)
+
+
+class VadSwitchRequest(BaseModel):
+    mode: str   # rule | omni
+
+
+@app.post("/api/vad_switch")
+async def vad_switch(req: VadSwitchRequest):
+    """动态切换语义 VAD 实现（不重启，前端开关调用）。"""
+    global vad_judge
+    if req.mode not in ("rule", "omni"):
+        return JSONResponse({"error": "mode 必须是 rule 或 omni"}, status_code=400)
+    VAD_MODE["mode"] = req.mode
+    vad_judge = RuleVadJudge() if req.mode == "rule" else OmniVadJudge(host=HOST, api_key=KEY)
+    log.info("VAD_SWITCH mode=%s", req.mode)
+    return {"ok": True, "mode": req.mode}
+
+
+@app.get("/api/vad_mode")
+async def vad_mode():
+    return {"mode": VAD_MODE["mode"]}
 
 
 class ChatRequest(BaseModel):

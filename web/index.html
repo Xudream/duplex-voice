@@ -122,6 +122,7 @@
   </div>
   <div class="cont-row">
     <button class="cont-btn" id="contBtn" disabled>🎧 持续对话</button>
+    <button class="cont-btn" id="vadBtn" disabled title="切换语义 VAD 实现（rule 规则 / omni 模型）">🧠 VAD: …</button>
     <div class="hint" id="hint">按住说话 · 松开识别</div>
   </div>
   <div class="vad-info" id="vadInfo"></div>
@@ -132,6 +133,8 @@
 const $ = id => document.getElementById(id);
 const btn = $('wakeBtn'), chat = $('chat'), stage = $('stage'), hint = $('hint');
 const micIcon = $('micIcon'), ripple = $('ripple'), waveCanvas = $('wave');
+const contBtn = $('contBtn'), vadBtn = $('vadBtn');
+let vadMode = null;   // 当前语义 VAD 模式（rule | omni）
 
 let mediaRecorder = null, chunks = [], recording = false, busy = false;
 let audioCtx = null, analyser = null, animId = null;
@@ -144,7 +147,6 @@ let isReplying = false;                          // AI 回复播放中（抑制 
 let clientId = localStorage.getItem('voice_client_id') || ('c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
 localStorage.setItem('voice_client_id', clientId);
 let userMsg = null;    // 当前用户气泡（partial 实时更新）
-const contBtn = $('contBtn');
 
 // ---- 前端日志（console + 环形缓冲 + 自动上报 server；window.exportVoiceLog() 导出） ----
 const VOICE_LOG = { max: 500, buf: [], pending: [], timer: null };
@@ -461,7 +463,38 @@ function stopContMode() {
 fetch('/api/health').then(r => r.json()).then(() => {
   $('connDot').classList.add('on'); $('connText').textContent = '已连接';
   btn.disabled = false; contBtn.disabled = false;
+  // 语义 VAD 开关：获取当前模式并启用
+  fetch('/api/vad_mode').then(r => r.json()).then(d => {
+    vadMode = d.mode;
+    vadBtn.textContent = '🧠 VAD: ' + vadMode;
+    vadBtn.disabled = false;
+  }).catch(() => { vadBtn.textContent = '🧠 VAD: -'; });
 }).catch(() => { $('connText').textContent = '后端未启动'; });
+
+// 语义 VAD 动态切换（rule 规则 ↔ omni 模型，不重启）
+vadBtn.addEventListener('click', async () => {
+  if (!vadMode) return;
+  const next = vadMode === 'rule' ? 'omni' : 'rule';
+  vadBtn.disabled = true;
+  try {
+    const r = await fetch('/api/vad_switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: next }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      vadMode = d.mode;
+      vadBtn.textContent = '🧠 VAD: ' + vadMode;
+      setStage('🧠 语义 VAD 已切换为 ' + vadMode);
+      vlog('INFO', 'VAD_SWITCH', '界面切换', { mode: vadMode });
+    }
+  } catch (e) {
+    setStage('❌ VAD 切换失败');
+  } finally {
+    vadBtn.disabled = false;
+  }
+});
 
 // ---- 阶段状态 ----
 function setStage(html) { stage.innerHTML = html; }
