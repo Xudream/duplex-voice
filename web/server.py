@@ -314,10 +314,11 @@ async def fusion_mode():
 @app.post("/api/vad_switch")
 async def vad_switch(req: VadSwitchRequest):
     """动态切换语义 VAD 实现（不重启，前端开关调用）。"""
-    global vad_judge
+    global vad_judge, VAD_JUDGE
     if req.mode not in ("rule", "omni"):
         return JSONResponse({"error": "mode 必须是 rule 或 omni"}, status_code=400)
     VAD_MODE["mode"] = req.mode
+    VAD_JUDGE = req.mode   # 同步更新（vad_state 事件/日志用——否则 rule 模式仍显示 omni）
     vad_judge = RuleVadJudge() if req.mode == "rule" else OmniVadJudge(host=HOST, api_key=KEY)
     log.info("VAD_SWITCH mode=%s", req.mode)
     return {"ok": True, "mode": req.mode}
