@@ -645,10 +645,12 @@ async def chat(req: ChatRequest):
                     yield 'data: {"type":"slow_delta","delta":%s}\n\n' % json.dumps(ev[1])
                 elif ev[0] == "audio_chunk":
                     # 流式 TTS：PCM 块（base64）→ 前端 Web Audio 边收边播
+                    got_slow_tts = True   # 已有流式音频 → 兜底不再重复合成
                     _, i, b64s = ev
                     real_idx = i + (1 if fast_tts_url else 0)
                     yield 'data: {"type":"audio_chunk","idx":%d,"b64":%s}\n\n' % (real_idx, json.dumps(b64s))
                 elif ev[0] == "audio_end":
+                    got_slow_tts = True
                     _, i, first_ms = ev
                     real_idx = i + (1 if fast_tts_url else 0)
                     yield 'data: {"type":"audio_end","idx":%d,"first_ms":%s}\n\n' % (
