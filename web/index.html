@@ -162,6 +162,9 @@ let turnId = 0;       // 对话轮次（metrics 归属校验：done 后残留播
 let speechStartEpoch = 0, speechEndEpoch = 0;   // 人开始说话/说完话的 epoch 毫秒（时延基准）
 let tSendStart = 0;                              // sendAudio 发出时刻（上传+ASR 时延起点）
 let isReplying = false;                          // AI 回复播放中（抑制 VAD 切段发送，防回声串扰）
+let userInterrupting = false;   // 播放期用户语音已触发停播（每轮发送后重置）
+let playBaseRms = 0;            // 播放期 TTS 声 RMS 基线（滑动学习——扬声器场景：回声进 mic
+                                // 持续撑高 Silero → 判停永不触发。能量突增（人声叠加）才停播）
 let clientId = localStorage.getItem('voice_client_id') || ('c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
 localStorage.setItem('voice_client_id', clientId);
 let userMsg = null;    // 当前用户气泡（partial 实时更新）
@@ -324,6 +327,17 @@ async function contLoop() {
     if (contVoteWin.length > CONT_VOTE_WIN) contVoteWin.shift();
     const vote = contVoteWin.reduce((a, b) => a + b, 0);
     const dt = 32;   // 512/16000 = 32ms（固定音频时间，不用 wall clock）
+    // 播放期（扬声器场景）：TTS 声进 mic 持续撑高 Silero/能量 → 静音判停永不触发。
+    // 滑动学习 TTS 声基线，能量突增（人声 + TTS 声叠加 > 基线 2.2 倍）才判定用户语音 → 停播
+    // （TTS 声自身被基线吸收不会误触发——与上次"Silero 即停播"方案的区别）
+    if (isReplying && !userInterrupting) {
+      playBaseRms = playBaseRms * 0.92 + rms * 0.08;
+      if (playBaseRms > 0.008 && rms > playBaseRms * 2.2 && rms > 0.02) {
+        userInterrupting = true;
+        stopAllPlayback();
+        vlog('INFO', 'VAD', '播放期能量突增→停播', { base: +playBaseRms.toFixed(4), rms: +rms.toFixed(4) });
+      }
+    }
     const isSpeech = contVoice ? (vote >= CONT_VOTE_EXIT) : (vote >= CONT_VOTE_MIN);
     // 段内语音确认统计（仅 contVoice 期间，供切段时占比过滤）
     if (contVoice) {
@@ -775,6 +789,7 @@ async function sendAudio(b64) {
   setStage('<span class="spinner"></span>上传音频…');
   let userMsg = null, aiMsg = null, aiHtml = '';
   metrics = { turn: ++turnId };   // 本轮新 metrics（done 后残留播放链写入的旧值不污染本轮）
+  userInterrupting = false; playBaseRms = 0;   // 播放期停播标记/基线重置（新轮）
   sendEndEpoch = speechEndEpoch;   // 发送时刻"人说完"快照（全局——pumpStream/playNow 都能访问；speechEndEpoch 会被后续判停覆盖）
   tSendStart = performance.now();   // 请求发出时刻（上传+ASR 处理时延起点）
   // 超时保护：慢通道异常/网络卡死时 30s 强制恢复（防 busy 永久占用导致后续说话全被丢弃）
