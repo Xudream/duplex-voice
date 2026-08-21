@@ -153,6 +153,7 @@ const vadBehavior = () => VAD_BEHAVIOR[vadMode] || VAD_BEHAVIOR.rule;
 
 let mediaRecorder = null, chunks = [], recording = false, busy = false;
 let sendEndEpoch = 0;   // 发送时刻"人说完"快照（全局——pumpStream/playNow 算响应用；sendAudio 里每轮赋值）
+let userInterrupting = false;   // 播放期用户语音已触发停播（每轮发送后重置）
 let audioCtx = null, analyser = null, animId = null;
 let playQueue = {};   // 句子音频队列（idx → Audio）
 let metrics = {};     // 各阶段时延（asr_text/asr_final/silence/slow_first/tts_first/total）
@@ -332,6 +333,14 @@ async function contLoop() {
     if (isSpeech) {
       contVoiceMs += dt; contSilenceMs = 0;
       contLastSpeechTs = Date.now();   // 最后语音帧时刻（判停时长基准）
+      // 播放期用户语音 → 立即停播（TTS 声持续会撑高能量/语音概率 → 静音判停
+      // 永不触发 → 段切不出 → '播放时说话难识别'。停播后 mic 只剩人声，
+      // 静音判停正常切段；语义 VAD 在段发送后决定是否回复）
+      if (isReplying && !userInterrupting) {
+        userInterrupting = true;
+        stopAllPlayback();
+        vlog('INFO', 'VAD', '播放期语音→停播', { ts: Date.now() });
+      }
       if (vote < CONT_VOTE_MIN) contLowVoteMs += dt; else contLowVoteMs = 0;   // 中等级投票（环境音 5-6）连续计时
       // 判停检查（isSpeech=true 时也执行——环境音 vote≥7 持续时 else 分支永远不进，
       // 若只放 else 会导致超长兜底永不触发、'聆听中'无限卡死）
@@ -774,6 +783,7 @@ async function sendAudio(b64) {
   setStage('<span class="spinner"></span>上传音频…');
   let userMsg = null, aiMsg = null, aiHtml = '';
   metrics = { turn: ++turnId };   // 本轮新 metrics（done 后残留播放链写入的旧值不污染本轮）
+  userInterrupting = false;   // 播放期停播标记重置（新轮）
   sendEndEpoch = speechEndEpoch;   // 发送时刻"人说完"快照（全局——pumpStream/playNow 都能访问；speechEndEpoch 会被后续判停覆盖）
   tSendStart = performance.now();   // 请求发出时刻（上传+ASR 处理时延起点）
   // 超时保护：慢通道异常/网络卡死时 30s 强制恢复（防 busy 永久占用导致后续说话全被丢弃）
