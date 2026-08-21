@@ -665,6 +665,7 @@ async function sendAudio(b64) {
         audio_b64: b64, client_id: clientId,
         speech_start_ms: speechStartEpoch,   // 人开始说话（epoch ms，server 按时延基准统计）
         speech_end_ms: speechEndEpoch,       // 人说完话
+        is_replying: isReplying,             // 发送时刻 AI 是否播放中（语义 VAD 判断 barge_in）
       }),
       signal: ac.signal,
     });

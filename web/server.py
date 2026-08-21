@@ -81,16 +81,18 @@ class VadState:
 
 
 class VadJudge:
-    """语义 VAD 抽象接口：judge(text, history, last_replies) -> (state, reason)。"""
+    """语义 VAD 抽象接口：judge(text, history, last_replies, is_replying) -> (state, reason)。"""
 
-    async def judge(self, text: str, history: list[dict], last_replies=()) -> tuple[str, str]:
+    async def judge(self, text: str, history: list[dict], last_replies=(),
+                    is_replying: bool = False) -> tuple[str, str]:
         raise NotImplementedError
 
 
 class RuleVadJudge(VadJudge):
     """规则实现（现有 _is_noise_text + _is_tts_echo 封装）：零成本、确定、可作兜底。"""
 
-    async def judge(self, text: str, history: list[dict], last_replies=()) -> tuple[str, str]:
+    async def judge(self, text: str, history: list[dict], last_replies=(),
+                    is_replying: bool = False) -> tuple[str, str]:
         if _is_noise_text(text):
             return VadState.NOISE, "noise_text"
         if _is_tts_echo(text, history, last_replies):
@@ -109,7 +111,8 @@ class OmniVadJudge(VadJudge):
         self.api_key = api_key
         self._fallback = RuleVadJudge()
 
-    async def judge(self, text: str, history: list[dict], last_replies=()) -> tuple[str, str]:
+    async def judge(self, text: str, history: list[dict], last_replies=(),
+                    is_replying: bool = False) -> tuple[str, str]:
         # 组合实现：确定性规则先行（回声 0.7 相似度、纯语气词）→ Omni 语义补充
         # （可插拔接缝的体现：实现内部可组合，不牺牲规则 VAD 已解决的确定场景）
         if _is_noise_text(text):
@@ -117,6 +120,7 @@ class OmniVadJudge(VadJudge):
         if _is_tts_echo(text, history, last_replies):
             return VadState.TTS_ECHO, "tts_echo sim>0.7(rule)"
         try:
+            playing = "是" if is_replying else "否"
             system = (
                 "你是全双工语音对话系统的语义 VAD（语音活动检测）。给定用户语音转写文本、"
                 "AI 最近播放的回复、对话历史，判断用户当前状态。只输出 JSON，不要其他内容："
@@ -129,6 +133,10 @@ class OmniVadJudge(VadJudge):
                 "- noise：无意义内容/转录噪声/幻觉（如'谢谢观看''请订阅'）"
                 "- tts_echo：内容与 AI 刚播放的回复几乎逐字一致（麦克风拾取 AI 声音的回声）"
                 "- reject：听不清/不理解（用户请求重复，如'什么？''再说一遍'）"
+                "\n\n关键规则："
+                f"- 当前 AI 是否正在播放回复：{playing}（这是权威状态，即使播放历史为空也以此为准）"
+                "- 若'正在播放'（是）且用户内容为完整新指令 → 判定 barge_in（不是 complete），无论播放历史是否为空"
+                "- 若'不在播放'（否）且内容完整 → 判定 complete"
             )
             user = (
                 f"AI 最近播放的回复：{json.dumps(list(last_replies or []), ensure_ascii=False)}\n"
@@ -285,6 +293,7 @@ class ChatRequest(BaseModel):
     client_id: str = "default"   # 多轮会话标识（前端生成）
     speech_start_ms: int = 0     # 人开始说话的 epoch 毫秒（前端 VAD/按钮记录）
     speech_end_ms: int = 0       # 人说完话的 epoch 毫秒（静音判停/松开按钮）
+    is_replying: bool = False    # 发送时刻 AI 是否正在播放回复（语义 VAD 判断 barge_in 的关键输入）
 
 
 @app.post("/api/chat")
@@ -352,7 +361,14 @@ async def chat(req: ChatRequest):
                     log.info("VADJUDGE cid=%s 续说合并: %r + %r", req.client_id,
                              pending["text"], asr_text)
             vstate, vreason = await vad_judge.judge(
-                merged_text, HISTORIES.get(req.client_id, []), LAST_REPLY.get(req.client_id, ""))
+                merged_text, HISTORIES.get(req.client_id, []), LAST_REPLY.get(req.client_id, ""),
+                is_replying=req.is_replying)
+            # 播放状态是确定性事实（前端实时上报）——规则层组合：
+            # complete + 播放中 = 打断（barge_in）——不依赖模型理解播放状态
+            if vstate == VadState.COMPLETE and req.is_replying:
+                vstate = VadState.BARGE_IN
+                vreason = "complete+播放中→barge_in(rule)"
+                log.info("VADJUDGE cid=%s 规则升级: complete+is_replying → barge_in", req.client_id)
             log.info("VADJUDGE cid=%s state=%s reason=%s vad=%s", req.client_id,
                      vstate, vreason[:50], VAD_JUDGE)
             yield 'data: {"type":"vad_state","state":%s,"vad":%s}\n\n' % (
