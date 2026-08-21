@@ -242,6 +242,7 @@ def _local_tts(text: str, voice: str = "Cherry") -> tuple:
     local = TTS_CACHE / name
     if local.exists():
         return f"/tts_cache/{name}", 0, 0
+    TTS_CACHE.mkdir(parents=True, exist_ok=True)   # 目录缺失自动重建（服务重启后）
     t_tts = time.time()
     remote = tts._synthesize_url(text, voice)
     tts_ms = int((time.time() - t_tts) * 1000)
