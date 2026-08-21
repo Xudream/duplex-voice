@@ -216,8 +216,7 @@ else:
 VAD_MODE = {"mode": VAD_JUDGE}   # 运行中可切换（前端开关）
 FUSION_MODE = {"mode": os.environ.get("FUSION_MODE", "fastslow")}   # fastslow | direct（运行中可切换）
 fusion: FusionStrategy = get_fusion_strategy(FUSION_MODE["mode"])   # 全局融合策略（可插拔）
-TTS_STREAM = os.environ.get("TTS_STREAM", "1") == "1"   # 启动默认（流式）
-TTS_MODE = {"mode": "stream" if TTS_STREAM else "batch"}   # 运行中可切换：stream=承接语流式+慢句整段并行 / batch=全整段
+TTS_STREAM = os.environ.get("TTS_STREAM", "1") == "1"   # 流式 TTS（realtime WS 边合成边播；0=整段）
 tts_stream = Qwen3TTSStream(HOST, KEY)   # 流式 TTS 实例（每句一个 WS 会话）
 
 
@@ -233,23 +232,22 @@ def _is_noise_text(text: str) -> bool:
     return False
 
 
-def _local_tts(text: str, voice: str = "Cherry", speech_rate: float | None = None) -> tuple:
+def _local_tts(text: str, voice: str = "Cherry") -> tuple:
     """合成 TTS 并转本地缓存 → (本地 URL, 合成耗时ms, 公网下载耗时ms)。
 
     公网部分（DashScope 合成 API + 云端音频下载）单独计时——下载抖动
     会反映在'响应'里，需单独显示（前端 tts_sentence.dl_ms）。
-    同文本同音色同语速缓存命中时合成/下载均 0（无公网调用）。
-    speech_rate：承接语 1.25 提速（缩短慢句首句等待），缓存 key 含语速。
+    同文本同音色缓存命中时合成/下载均 0（无公网调用）。
     """
     import hashlib
     import urllib.request as _urlreq
-    name = hashlib.md5((text + voice + str(speech_rate)).encode()).hexdigest()[:16] + ".wav"
+    name = hashlib.md5((text + voice).encode()).hexdigest()[:16] + ".wav"
     local = TTS_CACHE / name
     if local.exists():
         return f"/tts_cache/{name}", 0, 0
     TTS_CACHE.mkdir(parents=True, exist_ok=True)   # 目录缺失自动重建（服务重启后）
     t_tts = time.time()
-    remote = tts._synthesize_url(text, voice, speech_rate)
+    remote = tts._synthesize_url(text, voice)
     tts_ms = int((time.time() - t_tts) * 1000)
     with _urlreq.urlopen(remote, timeout=30) as r:
         data = r.read()
@@ -342,22 +340,6 @@ async def fusion_switch(req: FusionSwitchRequest):
 @app.get("/api/fusion_mode")
 async def fusion_mode():
     return {"mode": FUSION_MODE["mode"]}
-
-
-@app.post("/api/tts_switch")
-async def tts_switch(body: dict):
-    """动态切换 TTS 模式：stream（承接语流式+慢句整段并行）| batch（全整段），不重启。"""
-    mode = body.get("mode", "")
-    if mode not in ("stream", "batch"):
-        return JSONResponse({"error": "mode 必须是 stream 或 batch"}, status_code=400)
-    TTS_MODE["mode"] = mode
-    log.info("TTS_SWITCH mode=%s", mode)
-    return {"ok": True, "mode": mode}
-
-
-@app.get("/api/tts_mode")
-async def tts_mode():
-    return {"mode": TTS_MODE["mode"]}
 
 
 @app.post("/api/vad_switch")
@@ -515,14 +497,24 @@ async def chat(req: ChatRequest):
                     pending = {}   # idx → 合成任务
                     tts_t0 = {}
                     first_done = False
-                    # DashScope TTS 限流：5 路并发实测 429 Too Many Requests——
-                    # 信号量限 2 并发（安全且首句 2.5s 就绪；后续句合成 2.5s/句
-                    # 被播放 5.6s/句掩盖 → 流水线无缝，无需全并行）
-                    tts_sem = asyncio.Semaphore(2)
 
-                    async def _synth(sub: str):
-                        async with tts_sem:
-                            return await asyncio.to_thread(_local_tts, sub)
+                    async def stream_sentence(i: int, text: str):
+                        """流式合成句子：PCM 块入 audio_chunk 事件；完成入 audio_end；
+                        失败回退整段合成（tts_sentence_fb 事件）。"""
+                        try:
+                            first_ms = await tts_stream.synth(
+                                text, lambda pcm: slow_events.put_nowait(
+                                    ("audio_chunk", i, base64.b64encode(pcm).decode())))
+                            slow_events.put_nowait(("audio_end", i, first_ms))
+                        except Exception as e:
+                            log.error("STREAM_TTS_ERR cid=%s sent=%d err=%s → 回退整段",
+                                      req.client_id, i, str(e)[:80])
+                            try:
+                                u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, text)
+                                slow_events.put_nowait(("tts_sentence_fb", i, u, tts_ms, dl_ms))
+                            except Exception as e2:
+                                log.error("TTS_FB_ERR cid=%s sent=%d err=%s",
+                                          req.client_id, i, str(e2)[:80])
 
                     def flush():
                         nonlocal buf, sidx
@@ -535,19 +527,15 @@ async def chat(req: ChatRequest):
                             s = _strip_leading_filler(s)
                             if not s.strip():
                                 return
-                        # 长文本拆子句（15-40 字）并行合成——200 字整段 10.6s 会
-                        # 让慢句久等（承接语播完 gap 7.6s）；拆后每句 2-3s 就绪
-                        for sub in _split_clauses(s):
-                            sub = sub.strip()
-                            if not sub:
-                                continue
-                            i = sidx
-                            sidx += 1
-                            ts = time.time()
-                            # 慢句一律整段并行合成（实测 realtime WS 合成 2.4x 慢于实时，
-                            # 长句流式播放会中间等块卡顿；整段 ~2.5s 就绪，承接语播完无缝接播）
-                            pending[i] = asyncio.create_task(_synth(sub))
-                            tts_t0[i] = ts
+                        i = sidx
+                        sidx += 1
+                        ts = time.time()
+                        if TTS_STREAM:
+                            pending[i] = asyncio.create_task(stream_sentence(i, s))
+                        else:
+                            pending[i] = asyncio.create_task(
+                                asyncio.to_thread(_local_tts, s))
+                        tts_t0[i] = ts
 
                     try:
                         async for evt in slow_llm.stream_chat(messages):
@@ -568,9 +556,12 @@ async def chat(req: ChatRequest):
                         print(f"[slow] 失败: {e}")
                     for i in sorted(pending):
                         try:
-                            u, tts_ms, dl_ms = await pending[i]
-                            slow_events.put_nowait(
-                                ("tts_sentence", i, u, int((time.time() - tts_t0[i]) * 1000), dl_ms))
+                            if TTS_STREAM:
+                                await pending[i]   # 流式：事件已入队（audio_chunk/end/fb）
+                            else:
+                                u, tts_ms, dl_ms = await pending[i]
+                                slow_events.put_nowait(
+                                    ("tts_sentence", i, u, int((time.time() - tts_t0[i]) * 1000), dl_ms))
                         except Exception as e:
                             log.error("TTS_ERR cid=%s sentence=%d err=%s", req.client_id, i, e)
                     slow_events.put_nowait((("slow_done",)))
@@ -599,51 +590,60 @@ async def chat(req: ChatRequest):
                     fast_ms = int((time.time() - t0) * 1000)
                     log.info("FAST cid=%s text=%r ms=%d", req.client_id, fast_text, fast_ms)
                     yield 'data: {"type":"fast","text":%s,"latency_ms":%d}\n\n' % (json.dumps(fast_text), fast_ms)
-                    # 承接语立即流式 TTS → 事件入统一队列（i=-1 映射 idx=0），
-                    # 与慢句并行流式下发（不阻塞——慢句块无需等承接语合成完）
+                    # 承接语立即流式 TTS → idx=0 边合成边播（慢通道句子接在其后）
                     if fast_text:
                         t0 = time.time()
-                        if TTS_MODE["mode"] == "stream":
+                        if TTS_STREAM:
+                            fast_q: asyncio.Queue = asyncio.Queue()
 
                             async def _fast_stream(text, q):
                                 try:
                                     first_ms = await tts_stream.synth(
                                         text, lambda pcm: q.put_nowait(
-                                            ("audio_chunk", -1, base64.b64encode(pcm).decode())),
-                                        speech_rate=1.25)   # 承接语提速（4.3s→3.4s，缩短慢句首句等待）
-                                    q.put_nowait(("audio_end", -1, first_ms))
+                                            ("chunk", base64.b64encode(pcm).decode())))
+                                    q.put_nowait(("end", first_ms))
                                 except Exception as e:
                                     log.error("STREAM_TTS_ERR cid=%s fast err=%s → 回退整段",
                                               req.client_id, str(e)[:80])
-                                    try:
-                                        u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, text, speech_rate=1.25)
-                                        q.put_nowait(("tts_sentence_fb", -1, u, tts_ms, dl_ms))
-                                    except Exception as e2:
-                                        log.error("TTS_FB_ERR cid=%s fast err=%s",
-                                                  req.client_id, str(e2)[:80])
-                                finally:
-                                    q.put_nowait(("fast_done",))
+                                    q.put_nowait(("error", str(e)[:80]))
 
-                            fast_task = asyncio.create_task(_fast_stream(fast_text, slow_events))
+                            fast_task = asyncio.create_task(_fast_stream(fast_text, fast_q))
                             fast_tts_url = "stream"   # 标记流式（慢句 idx 偏移用）
+                            while True:
+                                try:
+                                    ev = await asyncio.wait_for(fast_q.get(), timeout=20)
+                                except asyncio.TimeoutError:
+                                    log.error("STREAM_TTS_ERR cid=%s fast 超时", req.client_id)
+                                    break
+                                if ev[0] == "chunk":
+                                    yield 'data: {"type":"audio_chunk","idx":0,"b64":%s}\n\n' % json.dumps(ev[1])
+                                elif ev[0] == "end":
+                                    fast_tts_ms = int((time.time() - t0) * 1000)
+                                    log.info("TTS cid=%s idx=0 fast stream ms=%d first=%s",
+                                             req.client_id, fast_tts_ms, ev[1])
+                                    yield 'data: {"type":"audio_end","idx":0,"first_ms":%s}\n\n' % json.dumps(ev[1])
+                                    break
+                                elif ev[0] == "error":
+                                    # 回退整段
+                                    u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, fast_text)
+                                    fast_tts_url = u
+                                    yield 'data: {"type":"tts_sentence","idx":0,"channel":"fast","url":%s,"latency_ms":%d,"dl_ms":%d}\n\n' % (json.dumps(u), tts_ms, dl_ms)
+                                    break
                         else:
-                            u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, fast_text, speech_rate=1.25)
+                            u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, fast_text)
                             fast_tts_ms = int((time.time() - t0) * 1000)
                             fast_tts_url = u
                             log.info("TTS cid=%s idx=0 fast ms=%d dl_ms=%d", req.client_id, fast_tts_ms, dl_ms)
                             yield 'data: {"type":"tts_sentence","idx":0,"channel":"fast","url":%s,"latency_ms":%d,"dl_ms":%d}\n\n' % (json.dumps(u), fast_tts_ms, dl_ms)
                 except Exception as e:
                     log.error("FAST_ERR cid=%s err=%s", req.client_id, e)
-            # 4. 消费慢通道事件（边生成边流式下发——承接语/慢句块并行，
-            #    不再等 slow_task 全部完成才消费——修复慢句播放高延迟卡顿）
+            # 4. 消费慢通道事件（承接语播放期间慢回复已持续生成 → 接播）
             yield 'data: {"type":"stage","stage":"slow"}\n\n'
+            await slow_task
             slow_text = ""
             got_slow_tts = False
-            slow_done_evt = False
-            fast_done_evt = False
-            need_fast = fast_tts_url == "stream"   # 流式承接语已启动（等其 fast_done）
-            while True:
-                ev = await slow_events.get()
+            while not slow_events.empty():
+                ev = slow_events.get_nowait()
                 if ev[0] == "slow_first":
                     _, sf_ms, sil_ms = ev
                     log.info("SLOW_FIRST cid=%s latency_ms=%d silence_ms=%s", req.client_id,
@@ -655,12 +655,10 @@ async def chat(req: ChatRequest):
                     yield 'data: {"type":"slow_delta","delta":%s}\n\n' % json.dumps(ev[1])
                 elif ev[0] == "audio_chunk":
                     # 流式 TTS：PCM 块（base64）→ 前端 Web Audio 边收边播
-                    got_slow_tts = True   # 已有流式音频 → 兜底不再重复合成
                     _, i, b64s = ev
                     real_idx = i + (1 if fast_tts_url else 0)
                     yield 'data: {"type":"audio_chunk","idx":%d,"b64":%s}\n\n' % (real_idx, json.dumps(b64s))
                 elif ev[0] == "audio_end":
-                    got_slow_tts = True
                     _, i, first_ms = ev
                     real_idx = i + (1 if fast_tts_url else 0)
                     yield 'data: {"type":"audio_end","idx":%d,"first_ms":%s}\n\n' % (
@@ -678,15 +676,7 @@ async def chat(req: ChatRequest):
                     log.info("TTS cid=%s idx=%d slow ms=%d dl_ms=%d", req.client_id, real_idx, ms, dl_ms)
                     yield 'data: {"type":"tts_sentence","idx":%d,"channel":"slow","url":%s,"latency_ms":%d,"dl_ms":%d}\n\n' % (real_idx, json.dumps(u), ms, dl_ms)
                 elif ev[0] == "slow_done":
-                    slow_done_evt = True
-                elif ev[0] == "slow_error":
-                    # run_slow 异常退出——按 slow_done 处理（防止消费循环永久等待）
-                    log.error("SLOW_DONE_ERR cid=%s err=%s", req.client_id, str(ev[1])[:80])
-                    slow_done_evt = True
-                elif ev[0] == "fast_done":
-                    fast_done_evt = True
-                if slow_done_evt and (not need_fast or fast_done_evt):
-                    break
+                    pass
             # 兜底：快/慢通道均无音频 → 整段合成（承接语已合成过则跳过）
             reply_for_tts = slow_text or fast_text
             if slow_text:
@@ -723,48 +713,6 @@ async def chat(req: ChatRequest):
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
-
-
-def _split_clauses(text: str, max_len: int = 40, min_len: int = 15):
-    """长文本拆子句（并行 TTS 合成用）：强标点（。！？；）必切；
-    超 max_len 按弱标点（，、）再切（加入前检查——每段 ≤max_len）；
-    短段（<min_len）与尾残段（标点残留）并入上一段。
-    目的：200 字整段合成 10.6s → 拆成 25-40 字子句并行合成各 2-3s，
-    承接语播完（~3s）时慢句全部就绪——消除'慢回复卡顿很久才开始播放'。"""
-    import re
-    parts = re.split(r"([。！？；.!?])", text)
-    pieces = [p for p in parts if p]
-    merged, cur = [], ""
-    for p in pieces:
-        cur += p
-        if len(cur) >= min_len:
-            merged.append(cur)
-            cur = ""
-    if cur.strip():
-        if merged:
-            merged[-1] += cur   # 尾残段（标点残留/短尾句）并入上一段
-        else:
-            merged.append(cur)
-    out = []
-    for c in merged:
-        c = c.strip()
-        if not c:
-            continue
-        if len(c) <= max_len:
-            out.append(c)
-            continue
-        sub = re.split(r"([，、])", c)
-        cur = ""
-        for p in sub:
-            if not p:
-                continue
-            if cur and len(cur) + len(p) > max_len:   # 加入前检查——防超切
-                out.append(cur.lstrip("，、 "))
-                cur = ""
-            cur += p
-        if cur.strip():
-            out.append(cur.lstrip("，、 "))
-    return out or [text]
 
 
 @app.get("/api/health")
