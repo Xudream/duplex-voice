@@ -31,27 +31,23 @@ class Qwen3TTSStream:
         self.model = model
         self.voice = voice
 
-    async def synth(self, text: str, chunk_cb, speech_rate: float | None = None):
+    async def synth(self, text: str, chunk_cb):
         """流式合成：chunk_cb(pcm_bytes) 逐块回调（边合成边返回）。
 
         返回首块时延 ms；异常抛给调用方（可回退整段合成）。
-        speech_rate：语速倍率（承接语 1.25 提速——缩短慢句首句等待）。
         """
         import websockets
         url = f"wss://{self.host}/api-ws/v1/realtime?model={self.model}"
         t0 = asyncio.get_event_loop().time()
         first_latency = None
-        session: dict = {"voice": self.voice, "response_format": "pcm",
-                         "sample_rate": SAMPLE_RATE, "mode": "server_commit",
-                         "volume": 50}
-        if speech_rate is not None:
-            session["speech_rate"] = speech_rate
         async with websockets.connect(url, proxy=None, open_timeout=10,
                                       additional_headers={"Authorization": f"Bearer {self.api_key}"}) as ws:
             await ws.send(json.dumps({
                 "event_id": "ev_" + uuid.uuid4().hex[:8],
                 "type": "session.update",
-                "session": session}))
+                "session": {"voice": self.voice, "response_format": "pcm",
+                            "sample_rate": SAMPLE_RATE, "mode": "server_commit",
+                            "volume": 50}}))
             await ws.send(json.dumps({
                 "event_id": "ev_" + uuid.uuid4().hex[:8],
                 "type": "input_text_buffer.append",

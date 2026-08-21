@@ -233,23 +233,22 @@ def _is_noise_text(text: str) -> bool:
     return False
 
 
-def _local_tts(text: str, voice: str = "Cherry", speech_rate: float | None = None) -> tuple:
+def _local_tts(text: str, voice: str = "Cherry") -> tuple:
     """合成 TTS 并转本地缓存 → (本地 URL, 合成耗时ms, 公网下载耗时ms)。
 
     公网部分（DashScope 合成 API + 云端音频下载）单独计时——下载抖动
     会反映在'响应'里，需单独显示（前端 tts_sentence.dl_ms）。
-    同文本同音色同语速缓存命中时合成/下载均 0（无公网调用）。
-    speech_rate：承接语 1.25 提速（缩短慢句首句等待），缓存 key 含语速。
+    同文本同音色缓存命中时合成/下载均 0（无公网调用）。
     """
     import hashlib
     import urllib.request as _urlreq
-    name = hashlib.md5((text + voice + str(speech_rate)).encode()).hexdigest()[:16] + ".wav"
+    name = hashlib.md5((text + voice).encode()).hexdigest()[:16] + ".wav"
     local = TTS_CACHE / name
     if local.exists():
         return f"/tts_cache/{name}", 0, 0
     TTS_CACHE.mkdir(parents=True, exist_ok=True)   # 目录缺失自动重建（服务重启后）
     t_tts = time.time()
-    remote = tts._synthesize_url(text, voice, speech_rate)
+    remote = tts._synthesize_url(text, voice)
     tts_ms = int((time.time() - t_tts) * 1000)
     with _urlreq.urlopen(remote, timeout=30) as r:
         data = r.read()
@@ -609,14 +608,13 @@ async def chat(req: ChatRequest):
                                 try:
                                     first_ms = await tts_stream.synth(
                                         text, lambda pcm: q.put_nowait(
-                                            ("audio_chunk", -1, base64.b64encode(pcm).decode())),
-                                        speech_rate=1.25)   # 承接语提速（4.3s→3.4s，缩短慢句首句等待）
+                                            ("audio_chunk", -1, base64.b64encode(pcm).decode())))
                                     q.put_nowait(("audio_end", -1, first_ms))
                                 except Exception as e:
                                     log.error("STREAM_TTS_ERR cid=%s fast err=%s → 回退整段",
                                               req.client_id, str(e)[:80])
                                     try:
-                                        u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, text, speech_rate=1.25)
+                                        u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, text)
                                         q.put_nowait(("tts_sentence_fb", -1, u, tts_ms, dl_ms))
                                     except Exception as e2:
                                         log.error("TTS_FB_ERR cid=%s fast err=%s",
@@ -627,7 +625,7 @@ async def chat(req: ChatRequest):
                             fast_task = asyncio.create_task(_fast_stream(fast_text, slow_events))
                             fast_tts_url = "stream"   # 标记流式（慢句 idx 偏移用）
                         else:
-                            u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, fast_text, speech_rate=1.25)
+                            u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, fast_text)
                             fast_tts_ms = int((time.time() - t0) * 1000)
                             fast_tts_url = u
                             log.info("TTS cid=%s idx=0 fast ms=%d dl_ms=%d", req.client_id, fast_tts_ms, dl_ms)

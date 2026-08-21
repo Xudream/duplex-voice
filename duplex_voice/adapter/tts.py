@@ -90,17 +90,13 @@ class Qwen3TTSProvider:
         # 禁用系统代理（Clash）——DashScope 国内直连
         return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-    def _synthesize_url(self, text: str, voice: str, speech_rate: float | None = None) -> str:
-        """合成并返回音频 URL（同步，线程内执行）。speech_rate：语速倍率
-        （承接语用 1.25 提速——4.3s 音频 → 3.4s，缩短慢句首句等待）。"""
+    def _synthesize_url(self, text: str, voice: str) -> str:
+        """合成并返回音频 URL（同步，线程内执行）。"""
         self._ensure_key()
-        params: dict = {"voice": voice}
-        if speech_rate is not None:
-            params["speech_rate"] = speech_rate
         body = json.dumps({
             "model": self.model,
             "input": {"text": text},
-            "parameters": params,
+            "parameters": {"voice": voice},
         }).encode()
         req = urllib.request.Request(
             f"https://{self.host}/api/v1/services/aigc/multimodal-generation/generation",
