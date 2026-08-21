@@ -150,6 +150,7 @@ const VAD_BEHAVIOR = {
 const vadBehavior = () => VAD_BEHAVIOR[vadMode] || VAD_BEHAVIOR.rule;
 
 let mediaRecorder = null, chunks = [], recording = false, busy = false;
+let sendEndEpoch = 0;   // 发送时刻"人说完"快照（全局——pumpStream/playNow 算响应用；sendAudio 里每轮赋值）
 let audioCtx = null, analyser = null, animId = null;
 let playQueue = {};   // 句子音频队列（idx → Audio）
 let metrics = {};     // 各阶段时延（asr_text/asr_final/silence/slow_first/tts_first/total）
@@ -742,8 +743,7 @@ async function sendAudio(b64) {
   setStage('<span class="spinner"></span>上传音频…');
   let userMsg = null, aiMsg = null, aiHtml = '';
   metrics = { turn: ++turnId };   // 本轮新 metrics（done 后残留播放链写入的旧值不污染本轮）
-  const sendEndEpoch = speechEndEpoch;   // 发送时刻"人说完"快照——playNow 用它算响应
-                                         // （全局 speechEndEpoch 会被后续判停覆盖，导致响应假值）
+  sendEndEpoch = speechEndEpoch;   // 发送时刻"人说完"快照（全局——pumpStream/playNow 都能访问；speechEndEpoch 会被后续判停覆盖）
   tSendStart = performance.now();   // 请求发出时刻（上传+ASR 处理时延起点）
   // 超时保护：慢通道异常/网络卡死时 30s 强制恢复（防 busy 永久占用导致后续说话全被丢弃）
   const ac = new AbortController();
