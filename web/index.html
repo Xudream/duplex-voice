@@ -741,6 +741,10 @@ async function sendAudio(b64) {
         // 用 turn 校验（metrics.turn === turnId）防止污染下一轮；sendAudio 开头重建
         setStage(''); setHint('按住说话 · 松开识别');
         break;
+      case 'vad_state':
+        // 语义 VAD 状态（可插拔：rule | omni）——显示在状态行，供验证语义判断
+        setStage(`🧠 语义VAD(${d.vad}): ${d.state}`);
+        break;
       case 'error':
         setStage('❌ ' + (d.msg || '错误'));
         setHint('请重试');

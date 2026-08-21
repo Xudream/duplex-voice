@@ -62,6 +62,130 @@ print(f"API key: {'已加载' if KEY else '缺失（export DASHSCOPE_API_KEY 或
 
 _NOISE_HINTS = ("嗯", "啊", "哦", "呃", "emm", "hmm", "哼", "哈", "嘿")
 
+# ==================== 语义 VAD 可插拔接缝 ====================
+# config: vad.judge（rule | omni）——RuleVadJudge=现有规则（默认，稳定）；
+#         OmniVadJudge=qwen3.5-omni-flash prompt 引导（语义判断，验证架构用）。
+# 接缝目标：语义 VAD 作为独立模块，实现可替换，系统其余部分（ASR→VAD→LLM→TTS）不变。
+VAD_JUDGE = os.environ.get("SEMANTIC_VAD", "rule")   # 或从 config.yaml vad.judge 读取
+
+
+class VadState:
+    """语义 VAD 状态 token（对齐 8 状态设计：完整/未完成/应声/打断/噪声/回声/拒识）。"""
+    COMPLETE = "complete"        # 完整指令，等待回复
+    INCOMPLETE = "incomplete"    # 语义不完整（没说完）
+    BACKCHANNEL = "backchannel"  # 应声（嗯/对），系统不应回应
+    BARGE_IN = "barge_in"        # 打断 AI 播放且内容完整（接管）
+    NOISE = "noise"              # 无意义/转录噪声/幻觉
+    TTS_ECHO = "tts_echo"        # 回声（与刚播放内容几乎逐字一致）
+    REJECT = "reject"            # 拒识（听不清，请求重复）
+
+
+class VadJudge:
+    """语义 VAD 抽象接口：judge(text, history, last_replies) -> (state, reason)。"""
+
+    async def judge(self, text: str, history: list[dict], last_replies=()) -> tuple[str, str]:
+        raise NotImplementedError
+
+
+class RuleVadJudge(VadJudge):
+    """规则实现（现有 _is_noise_text + _is_tts_echo 封装）：零成本、确定、可作兜底。"""
+
+    async def judge(self, text: str, history: list[dict], last_replies=()) -> tuple[str, str]:
+        if _is_noise_text(text):
+            return VadState.NOISE, "noise_text"
+        if _is_tts_echo(text, history, last_replies):
+            return VadState.TTS_ECHO, f"tts_echo sim>0.7"
+        return VadState.COMPLETE, "ok"
+
+
+class OmniVadJudge(VadJudge):
+    """Omni 实现：qwen3.5-omni-flash + prompt 引导判断语义（验证可插拔架构可行性）。
+    失败/超时自动回退 RuleVadJudge（接缝容错）。"""
+
+    MODEL = "qwen3.5-omni-flash"
+
+    def __init__(self, host: str, api_key: str):
+        self.host = host
+        self.api_key = api_key
+        self._fallback = RuleVadJudge()
+
+    async def judge(self, text: str, history: list[dict], last_replies=()) -> tuple[str, str]:
+        # 组合实现：确定性规则先行（回声 0.7 相似度、纯语气词）→ Omni 语义补充
+        # （可插拔接缝的体现：实现内部可组合，不牺牲规则 VAD 已解决的确定场景）
+        if _is_noise_text(text):
+            return VadState.NOISE, "noise_text(rule)"
+        if _is_tts_echo(text, history, last_replies):
+            return VadState.TTS_ECHO, "tts_echo sim>0.7(rule)"
+        try:
+            system = (
+                "你是全双工语音对话系统的语义 VAD（语音活动检测）。给定用户语音转写文本、"
+                "AI 最近播放的回复、对话历史，判断用户当前状态。只输出 JSON，不要其他内容："
+                '{"state": "complete|incomplete|backchannel|barge_in|noise|tts_echo|reject", "reason": "简短理由"}'
+                "\n\n状态定义："
+                "- complete：用户说完完整指令/问题，等待系统回复"
+                "- incomplete：语义不完整，明显没说完"
+                "- backchannel：仅应声词（嗯/对/好/明白）无新内容，系统不应回应"
+                "- barge_in：用户打断 AI 播放且内容完整（有新指令），系统应立即接管"
+                "- noise：无意义内容/转录噪声/幻觉（如'谢谢观看''请订阅'）"
+                "- tts_echo：内容与 AI 刚播放的回复几乎逐字一致（麦克风拾取 AI 声音的回声）"
+                "- reject：听不清/不理解（用户请求重复，如'什么？''再说一遍'）"
+            )
+            user = (
+                f"AI 最近播放的回复：{json.dumps(list(last_replies or []), ensure_ascii=False)}\n"
+                f"对话历史（最近3轮）：{json.dumps([m for m in history[-6:] if m.get('role') == 'user'][-3:] or history[-3:], ensure_ascii=False)}\n"
+                f"用户语音转写：{text}\n"
+                "请判断状态："
+            )
+            body = {
+                "model": self.MODEL,
+                "messages": [{"role": "system", "content": system},
+                             {"role": "user", "content": user}],
+                "temperature": 0.0,
+                "max_tokens": 64,
+            }
+            r = await _post_json(f"https://{self.host}/compatible-mode/v1/chat/completions",
+                                 headers={"Authorization": f"Bearer {self.api_key}"}, json=body,
+                                 timeout=8.0)
+            content = r["choices"][0]["message"]["content"]
+            state = _extract_state(content)
+            if state is None:
+                log.warning("VADJUDGE cid=- omni 输出无法解析: %r", content[:80])
+                return await self._fallback.judge(text, history, last_replies)
+            return state, content[:60]
+        except Exception as e:
+            log.warning("VADJUDGE cid=- omni 调用失败(%s) → 回退 rule", str(e)[:80])
+            return await self._fallback.judge(text, history, last_replies)
+
+
+def _extract_state(content: str) -> str | None:
+    """从 Omni 输出提取 state（容忍 JSON 包裹/代码块/多余文本）。"""
+    import re
+    m = re.search(r'"state"\s*:\s*"([a-z_]+)"', content)
+    if not m:
+        return None
+    s = m.group(1)
+    valid = {VadState.COMPLETE, VadState.INCOMPLETE, VadState.BACKCHANNEL, VadState.BARGE_IN,
+             VadState.NOISE, VadState.TTS_ECHO, VadState.REJECT}
+    return s if s in valid else None
+
+
+async def _post_json(url: str, headers: dict, json: dict, timeout: float = 8.0) -> dict:
+    """httpx POST JSON（语义 VAD 判断用，轻量同步等待）。"""
+    import httpx
+    async with httpx.AsyncClient(timeout=timeout, proxy=None) as client:
+        r = await client.post(url, headers=headers, json=json)
+        r.raise_for_status()
+        return r.json()
+
+
+# 实例化（可插拔：SEMANTIC_VAD=omni 切换）
+if VAD_JUDGE == "omni":
+    vad_judge: VadJudge = OmniVadJudge(host=HOST, api_key=KEY)
+    print(f"✅ 语义 VAD = Omni（{OmniVadJudge.MODEL}）——架构验证模式")
+else:
+    vad_judge = RuleVadJudge()
+    print("✅ 语义 VAD = Rule（默认）——SEMANTIC_VAD=omni 切换 Omni 验证")
+
 
 def _is_noise_text(text: str) -> bool:
     """噪声转录过滤：过短或纯语气词 → 视为无效语音（不触发回复）。"""
@@ -190,15 +314,33 @@ async def chat(req: ChatRequest):
                 log.warning("FILTER cid=%s reason=empty_asr", req.client_id)
                 yield 'data: {"type":"error","msg":"未识别到有效语音（环境噪声）"}\n\n'
                 return
-            if _is_noise_text(asr_text):
-                log.warning("FILTER cid=%s reason=noise text=%r", req.client_id, asr_text)
+            # 语义 VAD（可插拔：rule 规则 / omni prompt 引导）——判断噪声/回声/拒识/应声
+            vstate, vreason = await vad_judge.judge(
+                asr_text, HISTORIES.get(req.client_id, []), LAST_REPLY.get(req.client_id, ""))
+            log.info("VADJUDGE cid=%s state=%s reason=%s vad=%s", req.client_id,
+                     vstate, vreason[:50], VAD_JUDGE)
+            yield 'data: {"type":"vad_state","state":%s,"vad":%s}\n\n' % (
+                json.dumps(vstate), json.dumps(VAD_JUDGE))
+            if vstate == VadState.NOISE:
+                log.warning("FILTER cid=%s reason=noise(%s) text=%r", req.client_id, vreason, asr_text)
                 yield 'data: {"type":"error","msg":"未识别到有效语音（环境噪声）"}\n\n'
                 return
-            if _is_tts_echo(asr_text, HISTORIES.get(req.client_id, []), LAST_REPLY.get(req.client_id, "")):
-                log.warning("FILTER cid=%s reason=tts_echo text=%r last=%r", req.client_id,
-                            asr_text, LAST_REPLY.get(req.client_id, ""))
-                yield 'data: {"type":"error","msg":"未识别到有效语音（环境噪声）"}\n\n'
+            if vstate == VadState.TTS_ECHO:
+                log.warning("FILTER cid=%s reason=tts_echo(%s) text=%r", req.client_id, vreason, asr_text)
+                yield 'data: {"type":"error","msg":"检测到回声，已忽略"}\n\n'
                 return
+            if vstate == VadState.BACKCHANNEL:
+                log.info("FILTER cid=%s reason=backchannel(%s) text=%r", req.client_id, vreason, asr_text)
+                yield 'data: {"type":"error","msg":"收到应声（嗯/对）"}\n\n'
+                return
+            if vstate == VadState.REJECT:
+                log.info("FILTER cid=%s reason=reject(%s) text=%r", req.client_id, vreason, asr_text)
+                yield 'data: {"type":"error","msg":"没听清，请再说一遍"}\n\n'
+                return
+            if vstate == VadState.BARGE_IN:
+                log.info("BARGE_IN cid=%s text=%r", req.client_id, asr_text)
+                # barge-in 语义上等同完整指令（接管对话），走正常回复
+            # complete/incomplete → 正常处理
             # 3. 慢通道与快通道并行：ASR 完成即启动，事件入队，承接语播完按序接播
             slow_events: asyncio.Queue = asyncio.Queue()
             import re as _re
