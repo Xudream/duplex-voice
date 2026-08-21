@@ -30,11 +30,14 @@ def test_short_text_not_split():
 
 def test_punctuation_only_tail_merged():
     """尾残段（标点残留）并入上一段，不产生独立子句。"""
-    # 长文本尾部标点残留不产生 1 字子句
-    long = "从前有一座山，它每天清晨去溪边喝水。晚上数着星星慢慢入睡。。。"
+    # 两段均 ≥15 字 → 2 子句
+    long = "从前有一座山，它每天清晨去溪边喝水。晚上它数着星星慢慢入睡，梦见了远方的田野。"
     subs = _split_clauses(long)
     assert len(subs) == 2, f"应 2 子句: {subs}"
-    assert all(len(s) > 1 for s in subs), f"存在 1 字残段: {subs}"
+    # 尾部标点残留并入上一段（不产生 1 字残段）
+    subs2 = _split_clauses(long + "。。。")
+    assert len(subs2) == 2, f"残留应并入: {subs2}"
+    assert all(len(s) > 1 for s in subs2), f"存在 1 字残段: {subs2}"
     # 短句整体（<15 字）合并为 1 句
     assert _split_clauses("第一句。第二句。") == ["第一句。第二句。"]
 
