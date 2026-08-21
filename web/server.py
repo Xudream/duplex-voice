@@ -232,7 +232,9 @@ def _is_tts_echo(text: str, history: list[dict], last_replies=()) -> bool:
 # 多轮会话历史（按 client_id；简单内存实现，重启清空）
 HISTORIES: dict[str, list[dict]] = {}
 LAST_REPLY: dict[str, list[str]] = {}   # client_id → 最近实际播放文本列表 [承接语, 完整回复]
+PENDING_INCOMPLETE: dict[str, dict] = {}  # client_id → {text, ts} 未说完段缓存（incomplete 等待续说）
 MAX_HISTORY = 20
+PENDING_TTL_S = 30   # incomplete 缓存 30s 无续说则过期丢弃
 FRONTEND_LOGS: deque[str] = deque(maxlen=3000)   # 前端自动上报日志（定位问题用）
 
 asr = Qwen3ASRProvider(host=HOST, api_key=KEY, model=ASR_MODEL)
@@ -337,13 +339,34 @@ async def chat(req: ChatRequest):
                 log.warning("FILTER cid=%s reason=empty_asr", req.client_id)
                 yield 'data: {"type":"error","msg":"未识别到有效语音（环境噪声）"}\n\n'
                 return
-            # 语义 VAD（可插拔：rule 规则 / omni prompt 引导）——判断噪声/回声/拒识/应声
+            # 语义 VAD（可插拔：rule 规则 / omni prompt 引导）——判断噪声/回声/拒识/应声/未说完
+            # incomplete 续说合并：上一段判"没说完"则缓存，本段到达合并再判断（complete 才响应）
+            pending = PENDING_INCOMPLETE.get(req.client_id)
+            merged_text = asr_text
+            if pending:
+                if time.time() - pending["ts"] > PENDING_TTL_S:
+                    PENDING_INCOMPLETE.pop(req.client_id, None)   # 过期丢弃
+                    log.info("VADJUDGE cid=%s pending 过期丢弃", req.client_id)
+                else:
+                    merged_text = pending["text"] + asr_text
+                    log.info("VADJUDGE cid=%s 续说合并: %r + %r", req.client_id,
+                             pending["text"], asr_text)
             vstate, vreason = await vad_judge.judge(
-                asr_text, HISTORIES.get(req.client_id, []), LAST_REPLY.get(req.client_id, ""))
+                merged_text, HISTORIES.get(req.client_id, []), LAST_REPLY.get(req.client_id, ""))
             log.info("VADJUDGE cid=%s state=%s reason=%s vad=%s", req.client_id,
                      vstate, vreason[:50], VAD_JUDGE)
             yield 'data: {"type":"vad_state","state":%s,"vad":%s}\n\n' % (
                 json.dumps(vstate), json.dumps(VAD_JUDGE))
+            if vstate == VadState.INCOMPLETE:
+                # 没说完：缓存文本等待续说，不触发回复；前端继续聆听
+                PENDING_INCOMPLETE[req.client_id] = {"text": merged_text, "ts": time.time()}
+                log.info("VADJUDGE cid=%s incomplete 缓存待续 text=%r", req.client_id, merged_text)
+                yield 'data: {"type":"vad_incomplete","state":"incomplete","vad":%s}\n\n' % (
+                    json.dumps(VAD_JUDGE))
+                return
+            if pending:
+                PENDING_INCOMPLETE.pop(req.client_id, None)   # 本段完整，清缓存
+                asr_text = merged_text                        # 回复基于完整语义
             if vstate == VadState.NOISE:
                 log.warning("FILTER cid=%s reason=noise(%s) text=%r", req.client_id, vreason, asr_text)
                 yield 'data: {"type":"error","msg":"未识别到有效语音（环境噪声）"}\n\n'

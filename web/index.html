@@ -774,6 +774,11 @@ async function sendAudio(b64) {
         // 用 turn 校验（metrics.turn === turnId）防止污染下一轮；sendAudio 开头重建
         setStage(''); setHint('按住说话 · 松开识别');
         break;
+      case 'vad_incomplete':
+        // 语义 VAD 判断"没说完"：缓存待续，不触发回复——前端继续聆听（busy 在 SSE 结束时解除）
+        setStage('🧠 还没说完，请继续…');
+        setHint('继续说话');
+        break;
       case 'vad_state':
         // 语义 VAD 状态（可插拔：rule | omni）——显示在用户消息气泡上（持久可见）
         if (userMsg) {
