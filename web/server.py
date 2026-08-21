@@ -80,6 +80,42 @@ class VadState:
     REJECT = "reject"            # 拒识（听不清，请求重复）
 
 
+class BargeDecisionFSM:
+    """打断决策状态机：语义状态 × 播放状态 → 系统行为。
+
+    分工：模型（VadJudge）只判断"语义状态"（是否要响应）；
+    打断与否由确定性事实决定——AI 当前是否在播放 TTS。
+    转移表（semantic × is_playing → action, label）：
+
+        semantic      | is_playing=True          | is_playing=False
+        --------------|--------------------------|------------------
+        complete      | barge_in（打断接管）      | respond（正常回复）
+        incomplete    | wait（等待续说）          | wait
+        backchannel   | ignore（继续播，无感）    | ignore
+        noise         | ignore                   | ignore
+        tts_echo      | ignore（继续播）          | ignore
+        reject        | ignore（播放中不澄清）    | reject（澄清）
+    """
+
+    # 行为常量
+    RESPOND = "respond"     # 触发回复
+    BARGE_IN = "barge_in"   # 打断播放 + 触发回复
+    WAIT = "wait"           # 不回复，等续说
+    IGNORE = "ignore"       # 不回复不打断
+    REJECT = "reject"       # 澄清（"没听清，再说一遍"）
+
+    def decide(self, semantic: str, is_playing: bool) -> tuple[str, str]:
+        """输入语义状态 + 播放状态 → (行为, 对外状态标签)。"""
+        if semantic == VadState.COMPLETE:
+            return (self.BARGE_IN, VadState.BARGE_IN) if is_playing else (self.RESPOND, VadState.COMPLETE)
+        if semantic == VadState.INCOMPLETE:
+            return self.WAIT, VadState.INCOMPLETE
+        if semantic == VadState.REJECT:
+            return (self.IGNORE, VadState.REJECT) if is_playing else (self.REJECT, VadState.REJECT)
+        # backchannel / noise / tts_echo → 一律忽略（不打断、不回复）
+        return self.IGNORE, semantic
+
+
 class VadJudge:
     """语义 VAD 抽象接口：judge(text, history, last_replies, is_replying) -> (state, reason)。"""
 
@@ -363,14 +399,13 @@ async def chat(req: ChatRequest):
             vstate, vreason = await vad_judge.judge(
                 merged_text, HISTORIES.get(req.client_id, []), LAST_REPLY.get(req.client_id, ""),
                 is_replying=req.is_replying)
-            # 播放状态是确定性事实（前端实时上报）——规则层组合：
-            # complete + 播放中 = 打断（barge_in）——不依赖模型理解播放状态
-            if vstate == VadState.COMPLETE and req.is_replying:
-                vstate = VadState.BARGE_IN
-                vreason = "complete+播放中→barge_in(rule)"
-                log.info("VADJUDGE cid=%s 规则升级: complete+is_replying → barge_in", req.client_id)
-            log.info("VADJUDGE cid=%s state=%s reason=%s vad=%s", req.client_id,
-                     vstate, vreason[:50], VAD_JUDGE)
+            # 打断决策状态机：语义状态（模型判断）× 播放状态（确定性事实）→ 行为
+            # 模型只判断"是否要响应"；打断与否由"AI 是否在播放 TTS"决定
+            fsm = BargeDecisionFSM()
+            action, vstate = fsm.decide(vstate, req.is_replying)
+            log.info("VADJUDGE cid=%s semantic=%s playing=%s action=%s state=%s vad=%s",
+                     req.client_id, vreason[:30] if "(" in vreason else "omni", req.is_replying,
+                     action, vstate, VAD_JUDGE)
             yield 'data: {"type":"vad_state","state":%s,"vad":%s}\n\n' % (
                 json.dumps(vstate), json.dumps(VAD_JUDGE))
             if vstate == VadState.INCOMPLETE:
