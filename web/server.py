@@ -401,6 +401,7 @@ async def chat(req: ChatRequest):
                     merged_text = pending["text"] + asr_text
                     log.info("VADJUDGE cid=%s 续说合并: %r + %r", req.client_id,
                              pending["text"], asr_text)
+            t_vad = time.time()   # 语义 VAD 判断时延起点
             vstate, vreason = await vad_judge.judge(
                 merged_text, HISTORIES.get(req.client_id, []), LAST_REPLY.get(req.client_id, ""),
                 is_replying=req.is_replying)
@@ -408,11 +409,12 @@ async def chat(req: ChatRequest):
             # 模型只判断"是否要响应"；打断与否由"AI 是否在播放 TTS"决定
             fsm = BargeDecisionFSM()
             action, vstate = fsm.decide(vstate, req.is_replying)
-            log.info("VADJUDGE cid=%s semantic=%s playing=%s action=%s state=%s vad=%s",
+            vad_ms = int((time.time() - t_vad) * 1000)   # 语义 VAD 判断时延（仅 omni 有意义）
+            log.info("VADJUDGE cid=%s semantic=%s playing=%s action=%s state=%s vad=%s vad_ms=%d",
                      req.client_id, vreason[:30] if "(" in vreason else "omni", req.is_replying,
-                     action, vstate, VAD_JUDGE)
-            yield 'data: {"type":"vad_state","state":%s,"vad":%s}\n\n' % (
-                json.dumps(vstate), json.dumps(VAD_JUDGE))
+                     action, vstate, VAD_JUDGE, vad_ms)
+            yield 'data: {"type":"vad_state","state":%s,"vad":%s,"latency_ms":%d}\n\n' % (
+                json.dumps(vstate), json.dumps(VAD_JUDGE), vad_ms)
             if vstate == VadState.INCOMPLETE:
                 # 没说完：缓存文本等待续说，不触发回复；前端继续聆听
                 PENDING_INCOMPLETE[req.client_id] = {"text": merged_text, "ts": time.time()}
