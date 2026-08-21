@@ -229,22 +229,27 @@ def _is_noise_text(text: str) -> bool:
     return False
 
 
-def _local_tts(text: str, voice: str = "Cherry") -> str:
-    """合成 TTS 并转本地缓存（下载 DashScope 云端 URL → 本地文件）。
+def _local_tts(text: str, voice: str = "Cherry") -> tuple:
+    """合成 TTS 并转本地缓存 → (本地 URL, 合成耗时ms, 公网下载耗时ms)。
 
-    前端播放本地 URL（毫秒级）——响应时延不含公网下载抖动（实测云端
-    URL 下载可波动 3s+，会虚高'响应(说完→开始播)'）。
-    同文本同音色复用缓存。
+    公网部分（DashScope 合成 API + 云端音频下载）单独计时——下载抖动
+    会反映在'响应'里，需单独显示（前端 tts_sentence.dl_ms）。
+    同文本同音色缓存命中时合成/下载均 0（无公网调用）。
     """
     import hashlib
     import urllib.request as _urlreq
     name = hashlib.md5((text + voice).encode()).hexdigest()[:16] + ".wav"
     local = TTS_CACHE / name
-    if not local.exists():
-        remote = tts._synthesize_url(text, voice)
-        with _urlreq.urlopen(remote, timeout=30) as r:
-            local.write_bytes(r.read())
-    return f"/tts_cache/{name}"
+    if local.exists():
+        return f"/tts_cache/{name}", 0, 0
+    t_tts = time.time()
+    remote = tts._synthesize_url(text, voice)
+    tts_ms = int((time.time() - t_tts) * 1000)
+    with _urlreq.urlopen(remote, timeout=30) as r:
+        data = r.read()
+    dl_ms = int((time.time() - t_tts) * 1000) - tts_ms
+    local.write_bytes(data)
+    return f"/tts_cache/{name}", tts_ms, dl_ms
 
 
 def _strip_leading_filler(text: str) -> str:
@@ -526,9 +531,9 @@ async def chat(req: ChatRequest):
                         print(f"[slow] 失败: {e}")
                     for i in sorted(pending):
                         try:
-                            u = await pending[i]
+                            u, tts_ms, dl_ms = await pending[i]
                             slow_events.put_nowait(
-                                ("tts_sentence", i, u, int((time.time() - tts_t0[i]) * 1000)))
+                                ("tts_sentence", i, u, int((time.time() - tts_t0[i]) * 1000), dl_ms))
                         except Exception as e:
                             log.error("TTS_ERR cid=%s sentence=%d err=%s", req.client_id, i, e)
                     slow_events.put_nowait((("slow_done",)))
@@ -560,11 +565,11 @@ async def chat(req: ChatRequest):
                     # 承接语立即合成 TTS → idx=0 最先入队播放（慢通道句子接在其后）
                     if fast_text:
                         t0 = time.time()
-                        u = await asyncio.to_thread(_local_tts, fast_text)
+                        u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, fast_text)
                         fast_tts_ms = int((time.time() - t0) * 1000)
                         fast_tts_url = u
-                        log.info("TTS cid=%s idx=0 fast ms=%d", req.client_id, fast_tts_ms)
-                        yield 'data: {"type":"tts_sentence","idx":0,"channel":"fast","url":%s,"latency_ms":%d}\n\n' % (json.dumps(u), fast_tts_ms)
+                        log.info("TTS cid=%s idx=0 fast ms=%d dl_ms=%d", req.client_id, fast_tts_ms, dl_ms)
+                        yield 'data: {"type":"tts_sentence","idx":0,"channel":"fast","url":%s,"latency_ms":%d,"dl_ms":%d}\n\n' % (json.dumps(u), fast_tts_ms, dl_ms)
                 except Exception as e:
                     log.error("FAST_ERR cid=%s err=%s", req.client_id, e)
             # 4. 消费慢通道事件（承接语播放期间慢回复已持续生成 → 接播）
@@ -585,10 +590,10 @@ async def chat(req: ChatRequest):
                     yield 'data: {"type":"slow_delta","delta":%s}\n\n' % json.dumps(ev[1])
                 elif ev[0] == "tts_sentence":
                     got_slow_tts = True
-                    _, i, u, ms = ev
+                    _, i, u, ms, dl_ms = ev
                     real_idx = i + (1 if fast_tts_url else 0)   # 承接语占 idx=0 → 慢句子偏移
-                    log.info("TTS cid=%s idx=%d slow ms=%d", req.client_id, real_idx, ms)
-                    yield 'data: {"type":"tts_sentence","idx":%d,"channel":"slow","url":%s,"latency_ms":%d}\n\n' % (real_idx, json.dumps(u), ms)
+                    log.info("TTS cid=%s idx=%d slow ms=%d dl_ms=%d", req.client_id, real_idx, ms, dl_ms)
+                    yield 'data: {"type":"tts_sentence","idx":%d,"channel":"slow","url":%s,"latency_ms":%d,"dl_ms":%d}\n\n' % (real_idx, json.dumps(u), ms, dl_ms)
                 elif ev[0] == "slow_done":
                     pass
             # 兜底：快/慢通道均无音频 → 整段合成（承接语已合成过则跳过）
@@ -601,7 +606,7 @@ async def chat(req: ChatRequest):
             if not fast_tts_url and not got_slow_tts and reply_for_tts:
                 try:
                     t0 = time.time()
-                    u = _local_tts(reply_for_tts)
+                    u, _tts_ms, _dl_ms = _local_tts(reply_for_tts)
                     tts_ms = int((time.time() - t0) * 1000)
                     log.info("TTS cid=%s fallback ms=%d", req.client_id, tts_ms)
                     yield 'data: {"type":"tts_sentence","idx":0,"url":%s,"latency_ms":%d}\n\n' % (json.dumps(u), tts_ms)
