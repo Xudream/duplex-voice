@@ -590,45 +590,32 @@ async def chat(req: ChatRequest):
                     fast_ms = int((time.time() - t0) * 1000)
                     log.info("FAST cid=%s text=%r ms=%d", req.client_id, fast_text, fast_ms)
                     yield 'data: {"type":"fast","text":%s,"latency_ms":%d}\n\n' % (json.dumps(fast_text), fast_ms)
-                    # 承接语立即流式 TTS → idx=0 边合成边播（慢通道句子接在其后）
+                    # 承接语立即流式 TTS → 事件入统一队列（i=-1 映射 idx=0），
+                    # 与慢句并行流式下发（不阻塞——慢句块无需等承接语合成完）
                     if fast_text:
                         t0 = time.time()
                         if TTS_STREAM:
-                            fast_q: asyncio.Queue = asyncio.Queue()
 
                             async def _fast_stream(text, q):
                                 try:
                                     first_ms = await tts_stream.synth(
                                         text, lambda pcm: q.put_nowait(
-                                            ("chunk", base64.b64encode(pcm).decode())))
-                                    q.put_nowait(("end", first_ms))
+                                            ("audio_chunk", -1, base64.b64encode(pcm).decode())))
+                                    q.put_nowait(("audio_end", -1, first_ms))
                                 except Exception as e:
                                     log.error("STREAM_TTS_ERR cid=%s fast err=%s → 回退整段",
                                               req.client_id, str(e)[:80])
-                                    q.put_nowait(("error", str(e)[:80]))
+                                    try:
+                                        u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, text)
+                                        q.put_nowait(("tts_sentence_fb", -1, u, tts_ms, dl_ms))
+                                    except Exception as e2:
+                                        log.error("TTS_FB_ERR cid=%s fast err=%s",
+                                                  req.client_id, str(e2)[:80])
+                                finally:
+                                    q.put_nowait(("fast_done",))
 
-                            fast_task = asyncio.create_task(_fast_stream(fast_text, fast_q))
+                            fast_task = asyncio.create_task(_fast_stream(fast_text, slow_events))
                             fast_tts_url = "stream"   # 标记流式（慢句 idx 偏移用）
-                            while True:
-                                try:
-                                    ev = await asyncio.wait_for(fast_q.get(), timeout=20)
-                                except asyncio.TimeoutError:
-                                    log.error("STREAM_TTS_ERR cid=%s fast 超时", req.client_id)
-                                    break
-                                if ev[0] == "chunk":
-                                    yield 'data: {"type":"audio_chunk","idx":0,"b64":%s}\n\n' % json.dumps(ev[1])
-                                elif ev[0] == "end":
-                                    fast_tts_ms = int((time.time() - t0) * 1000)
-                                    log.info("TTS cid=%s idx=0 fast stream ms=%d first=%s",
-                                             req.client_id, fast_tts_ms, ev[1])
-                                    yield 'data: {"type":"audio_end","idx":0,"first_ms":%s}\n\n' % json.dumps(ev[1])
-                                    break
-                                elif ev[0] == "error":
-                                    # 回退整段
-                                    u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, fast_text)
-                                    fast_tts_url = u
-                                    yield 'data: {"type":"tts_sentence","idx":0,"channel":"fast","url":%s,"latency_ms":%d,"dl_ms":%d}\n\n' % (json.dumps(u), tts_ms, dl_ms)
-                                    break
                         else:
                             u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, fast_text)
                             fast_tts_ms = int((time.time() - t0) * 1000)
@@ -637,13 +624,16 @@ async def chat(req: ChatRequest):
                             yield 'data: {"type":"tts_sentence","idx":0,"channel":"fast","url":%s,"latency_ms":%d,"dl_ms":%d}\n\n' % (json.dumps(u), fast_tts_ms, dl_ms)
                 except Exception as e:
                     log.error("FAST_ERR cid=%s err=%s", req.client_id, e)
-            # 4. 消费慢通道事件（承接语播放期间慢回复已持续生成 → 接播）
+            # 4. 消费慢通道事件（边生成边流式下发——承接语/慢句块并行，
+            #    不再等 slow_task 全部完成才消费——修复慢句播放高延迟卡顿）
             yield 'data: {"type":"stage","stage":"slow"}\n\n'
-            await slow_task
             slow_text = ""
             got_slow_tts = False
-            while not slow_events.empty():
-                ev = slow_events.get_nowait()
+            slow_done_evt = False
+            fast_done_evt = False
+            need_fast = fast_tts_url == "stream"   # 流式承接语已启动（等其 fast_done）
+            while True:
+                ev = await slow_events.get()
                 if ev[0] == "slow_first":
                     _, sf_ms, sil_ms = ev
                     log.info("SLOW_FIRST cid=%s latency_ms=%d silence_ms=%s", req.client_id,
@@ -676,7 +666,15 @@ async def chat(req: ChatRequest):
                     log.info("TTS cid=%s idx=%d slow ms=%d dl_ms=%d", req.client_id, real_idx, ms, dl_ms)
                     yield 'data: {"type":"tts_sentence","idx":%d,"channel":"slow","url":%s,"latency_ms":%d,"dl_ms":%d}\n\n' % (real_idx, json.dumps(u), ms, dl_ms)
                 elif ev[0] == "slow_done":
-                    pass
+                    slow_done_evt = True
+                elif ev[0] == "slow_error":
+                    # run_slow 异常退出——按 slow_done 处理（防止消费循环永久等待）
+                    log.error("SLOW_DONE_ERR cid=%s err=%s", req.client_id, str(ev[1])[:80])
+                    slow_done_evt = True
+                elif ev[0] == "fast_done":
+                    fast_done_evt = True
+                if slow_done_evt and (not need_fast or fast_done_evt):
+                    break
             # 兜底：快/慢通道均无音频 → 整段合成（承接语已合成过则跳过）
             reply_for_tts = slow_text or fast_text
             if slow_text:
