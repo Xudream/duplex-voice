@@ -157,7 +157,8 @@ let mediaRecorder = null, chunks = [], recording = false, busy = false;
 let sendEndEpoch = 0;   // 发送时刻"人说完"快照（全局——pumpStream/playNow 算响应用；sendAudio 里每轮赋值）
 let audioCtx = null, analyser = null, animId = null;
 let playQueue = {};   // 句子音频队列（idx → Audio）
-let streamWaitIdx = null;   // 等待流式承接语播完的 playQueue 慢句 idx（防快慢重叠）
+let streamWaitIdx = null;   // 等待承接语播完的 playQueue 慢句 idx（防快慢重叠）
+let fastStreamActive = false;   // 本轮存在承接语（fast 事件/idx=0 已到）——慢句必须等其播完
 let metrics = {};     // 各阶段时延（asr_text/asr_final/silence/slow_first/tts_first/total）
 let turnId = 0;       // 对话轮次（metrics 归属校验：done 后残留播放链的 playNow 不得污染下一轮）
 let speechStartEpoch = 0, speechEndEpoch = 0;   // 人开始说话/说完话的 epoch 毫秒（时延基准）
@@ -771,21 +772,25 @@ function pumpStream(idx) {
   src.start();
   isReplying = true;
 }
-function finishStream(idx) {
-  streamFinished[idx] = true;
-  const next = idx + 1;
-  if (streamStates[next] && !streamFinished[next]) pumpStream(next);   // 句间接播
-  // 流式句播完 → 触发等待的 playQueue 慢句（整段等流式承接语——防快慢重叠）
-  if (streamWaitIdx != null && streamStates[streamWaitIdx] == null) {
+function triggerStreamWait() {
+  // 承接语（流式或整段）播完 → 触发等待的慢句（先播承接语，播完再播慢回复——防重叠）
+  if (streamWaitIdx != null && !streamStates[streamWaitIdx]?.playing) {
     const a = playQueue[streamWaitIdx];
     if (a) {
       // 注意：不置 undefined——playQueue[streamWaitIdx] 保留，后续慢句
       // （idx+1）仍挂其 ended 接播（置空会破坏链 → 后续句直接播 → 重叠）
-      vlog('INFO', 'PLAY', '流式承接语播完→接播慢句', { idx: streamWaitIdx, ts: Date.now() });
+      vlog('INFO', 'PLAY', '承接语播完→接播慢句', { idx: streamWaitIdx, ts: Date.now() });
       a.play().then(() => { isReplying = true; }).catch(e => { isReplying = false; vlog('WARN', 'PLAY', '慢句播放失败', { err: String(e).slice(0, 80) }); });
     }
     streamWaitIdx = null;
   }
+}
+function finishStream(idx) {
+  streamFinished[idx] = true;
+  const next = idx + 1;
+  if (streamStates[next] && !streamFinished[next]) pumpStream(next);   // 句间接播
+  if (idx === 0) fastStreamActive = false;   // 承接语流式播完
+  triggerStreamWait();   // 流式承接语播完 → 接播慢句
   if (Object.keys(streamStates).every(i => streamFinished[i])) {
     isReplying = false;   // 全部流式句播完
     if (playQueue && Object.keys(playQueue).length === 0) setStage('');
@@ -806,7 +811,7 @@ function stopAllPlayback() {
     st.sources.forEach(s => { try { s.stop(); s.onended = null; } catch (e) {} });
     st.sources = []; st.playing = false;
   });
-  streamStates = {}; streamFinished = {}; streamWaitIdx = null;
+  streamStates = {}; streamFinished = {}; streamWaitIdx = null; fastStreamActive = false;
   isReplying = false;
 }
 async function sendAudio(b64) {
@@ -820,6 +825,7 @@ async function sendAudio(b64) {
   let userMsg = null, aiMsg = null, aiHtml = '';
   metrics = { turn: ++turnId };   // 本轮新 metrics（done 后残留播放链写入的旧值不污染本轮）
   userInterrupting = false; playBaseRms = 0; surgeSince = 0;   // 播放期停播标记/基线重置（新轮）
+  fastStreamActive = false;   // 承接语存在标记重置（新轮——fast 事件到达时置位）
   sendEndEpoch = speechEndEpoch;   // 发送时刻"人说完"快照（全局——pumpStream/playNow 都能访问；speechEndEpoch 会被后续判停覆盖）
   tSendStart = performance.now();   // 请求发出时刻（上传+ASR 处理时延起点）
   // 超时保护：慢通道异常/网络卡死时 30s 强制恢复（防 busy 永久占用导致后续说话全被丢弃）
@@ -890,6 +896,7 @@ async function sendAudio(b64) {
       case 'fast':
         // 快路径 LLM 时延（承接语生成耗时，送本地 Ollama → 承接语完成）
         metrics.llm_fast = d.latency_ms;
+        fastStreamActive = true;   // 本轮有承接语 → 慢句必须等其播完（防重叠）
         if (!aiMsg) aiMsg = addMsg('ai', '');
         metrics.fast = d.latency_ms;
         aiHtml += `<span class="tag"><span class="fast-tag">⚡ 承接语</span> · 本地 qwen3.5:4b-mlx</span><div class="fast-text">${escapeHtml(d.text)}</div>`;
@@ -926,7 +933,7 @@ async function sendAudio(b64) {
         break;
       case 'tts_sentence':
         // 句子音频入队 → 链式连续播放（句 idx 播完自动播下一句）
-        if (d.idx === 0) stopAllPlayback();   // 新轮承接语 → 停上一轮残留播放（barge-in 防重叠）
+        if (d.idx === 0) { stopAllPlayback(); fastStreamActive = true; }   // 新轮承接语 → 停上一轮残留播放（barge-in 防重叠）
         aiMsg.innerHTML = aiHtml;
         setStage('🔊 播放回复…');
         (metrics.tts = metrics.tts || []).push(d.latency_ms);
@@ -953,11 +960,17 @@ async function sendAudio(b64) {
         // 修复竞态：慢句子晚到时承接语可能已播完，addEventListener 挂在已 ended 的
         // Audio 上永不触发 → 之前慢通道有文字没声音。
         const st0 = streamStates[0];   // 流式承接语播放状态（idx=0 走 pumpStream 不走 playQueue）
-        if (!prev && st0 && st0.playing) {
-          // 承接语是流式（pumpStream 在播）→ 挂其播完（finishStream 触发），防快慢重叠
+        if (idx === 0) {
+          // 承接语本身：直接播；播完触发等待的慢句（triggerStreamWait）
+          a.addEventListener('ended', triggerStreamWait);
+          isReplying = true;
+          playNow();
+        } else if (!prev && (fastStreamActive || (st0 && st0.playing))) {
+          // 本轮有承接语（fast 事件已到 / 承接语流式在播 / 承接语整段已入队）——
+          // 慢句挂等承接语播完（finishStream 或 playQueue[0].ended 触发），防快慢重叠
           isReplying = true;
           streamWaitIdx = idx;
-          vlog('INFO', 'PLAY', '慢句等流式承接语播完', { idx, ts: Date.now() });
+          vlog('INFO', 'PLAY', '慢句等承接语播完', { idx, ts: Date.now(), fast: fastStreamActive, st0: !!st0 });
         } else if (!prev || prev.ended || (prev.paused && prev.currentTime > 0)) {
           isReplying = true;   // 有音频要播 → 回声抑制生效
           playNow();
