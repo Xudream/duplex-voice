@@ -358,8 +358,9 @@ async function contLoop() {
       contVoiceMs = 0; contLowVoteMs = 0;
       if (contVoice) {
         contSilenceMs += dt;
-        // 判停：全静音 800ms（正常说完）；播放中插话 300ms 短判停（快速发送等语义判断）
-        if (contSilenceMs >= (isReplying ? CONT_SILENCE_BARGE_MS : CONT_SILENCE_MS)) {
+        // 判停：全静音 800ms（正常说完）；语义 VAD 模式播放中插话 300ms 短判停
+        // （声学 VAD 模式保持 800ms——打断在 flush 时立即执行，无需短判停）
+        if (contSilenceMs >= ((isReplying && vadMode === 'omni') ? CONT_SILENCE_BARGE_MS : CONT_SILENCE_MS)) {
           contVoice = false; contSilenceMs = 0;
           contCoolUntil = Date.now() + 2000;   // 冷却：防环境音判停后立即再触发
           contJudgeMs = Date.now() - contLastSpeechTs;   // 判停时长：语音结束→确认说完（显示'判停'）
@@ -432,10 +433,16 @@ async function flushContSegment() {
     return;
   }
   if (isReplying) {
-    // 播放中检测到语音：不立即打断（backchannel 应声不该砍播放）——先发送，
-    // 语义 VAD 确认 complete/barge_in 后才停播（vad_state 事件处理），
-    // backchannel/noise/echo 继续播（无感）
-    vlog('INFO', 'FLUSH', '播放中语音：发送待语义判断', { frames: pcm.length });
+    if (vadMode === 'omni') {
+      // 语义 VAD 模式：不立即打断（backchannel 应声不该砍播放）——先发送，
+      // 语义确认 complete/barge_in 后才停播（vad_state 事件处理），
+      // backchannel/noise/echo 继续播（无感）
+      vlog('INFO', 'FLUSH', '播放中语音：发送待语义判断', { frames: pcm.length });
+    } else {
+      // 声学 VAD 模式（rule）：保持原 barge-in 行为——立即打断
+      vlog('INFO', 'FLUSH', '插话打断播放（barge-in）', { frames: pcm.length });
+      stopAllPlayback();
+    }
   }
   vlog('INFO', 'FLUSH', '发送段', { frames: pcm.length, ms: Math.round(pcm.length / 16) });
   setStage('🎤 识别中…'); setHint('持续聆听中…');
@@ -787,9 +794,10 @@ async function sendAudio(b64) {
             `<span class="tag">🧠 语义VAD(${d.vad}): ${d.state}</span>`);
         }
         setStage('🧠 语义VAD(' + d.vad + '): ' + d.state);
-        // 播放中插话的打断决策（语义确认后才打断）：
+        // 播放中插话的打断决策（仅语义 VAD 模式：语义确认后才打断）：
         // complete/barge_in → 停播接管；backchannel/noise/echo/reject → 继续播（无感）
-        if (d.state === 'complete' || d.state === 'barge_in') {
+        // 声学 VAD 模式（rule）不在此打断——barge-in 已在 flushContSegment 立即执行
+        if (vadMode === 'omni' && (d.state === 'complete' || d.state === 'barge_in')) {
           if (isReplying) {
             vlog('INFO', 'PLAY', '语义确认打断', { state: d.state });
             stopAllPlayback();
