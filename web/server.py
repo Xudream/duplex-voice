@@ -514,6 +514,14 @@ async def chat(req: ChatRequest):
                     pending = {}   # idx → 合成任务
                     tts_t0 = {}
                     first_done = False
+                    # DashScope TTS 限流：5 路并发实测 429 Too Many Requests——
+                    # 信号量限 2 并发（安全且首句 2.5s 就绪；后续句合成 2.5s/句
+                    # 被播放 5.6s/句掩盖 → 流水线无缝，无需全并行）
+                    tts_sem = asyncio.Semaphore(2)
+
+                    async def _synth(sub: str):
+                        async with tts_sem:
+                            return await asyncio.to_thread(_local_tts, sub)
 
                     def flush():
                         nonlocal buf, sidx
@@ -526,14 +534,19 @@ async def chat(req: ChatRequest):
                             s = _strip_leading_filler(s)
                             if not s.strip():
                                 return
-                        i = sidx
-                        sidx += 1
-                        ts = time.time()
-                        # 慢句一律整段并行合成（实测 realtime WS 合成 2.4x 慢于实时，
-                        # 长句流式播放会中间等块卡顿；整段 ~2.5s 就绪，承接语播完无缝接播）
-                        pending[i] = asyncio.create_task(
-                            asyncio.to_thread(_local_tts, s))
-                        tts_t0[i] = ts
+                        # 长文本拆子句（15-40 字）并行合成——200 字整段 10.6s 会
+                        # 让慢句久等（承接语播完 gap 7.6s）；拆后每句 2-3s 就绪
+                        for sub in _split_clauses(s):
+                            sub = sub.strip()
+                            if not sub:
+                                continue
+                            i = sidx
+                            sidx += 1
+                            ts = time.time()
+                            # 慢句一律整段并行合成（实测 realtime WS 合成 2.4x 慢于实时，
+                            # 长句流式播放会中间等块卡顿；整段 ~2.5s 就绪，承接语播完无缝接播）
+                            pending[i] = asyncio.create_task(_synth(sub))
+                            tts_t0[i] = ts
 
                     try:
                         async for evt in slow_llm.stream_chat(messages):
@@ -708,6 +721,48 @@ async def chat(req: ChatRequest):
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
+
+
+def _split_clauses(text: str, max_len: int = 40, min_len: int = 15):
+    """长文本拆子句（并行 TTS 合成用）：强标点（。！？；）必切；
+    超 max_len 按弱标点（，、）再切（加入前检查——每段 ≤max_len）；
+    短段（<min_len）与尾残段（标点残留）并入上一段。
+    目的：200 字整段合成 10.6s → 拆成 25-40 字子句并行合成各 2-3s，
+    承接语播完（~3s）时慢句全部就绪——消除'慢回复卡顿很久才开始播放'。"""
+    import re
+    parts = re.split(r"([。！？；.!?])", text)
+    pieces = [p for p in parts if p]
+    merged, cur = [], ""
+    for p in pieces:
+        cur += p
+        if len(cur) >= min_len:
+            merged.append(cur)
+            cur = ""
+    if cur.strip():
+        if merged:
+            merged[-1] += cur   # 尾残段（标点残留/短尾句）并入上一段
+        else:
+            merged.append(cur)
+    out = []
+    for c in merged:
+        c = c.strip()
+        if not c:
+            continue
+        if len(c) <= max_len:
+            out.append(c)
+            continue
+        sub = re.split(r"([，、])", c)
+        cur = ""
+        for p in sub:
+            if not p:
+                continue
+            if cur and len(cur) + len(p) > max_len:   # 加入前检查——防超切
+                out.append(cur.lstrip("，、 "))
+                cur = ""
+            cur += p
+        if cur.strip():
+            out.append(cur.lstrip("，、 "))
+    return out or [text]
 
 
 @app.get("/api/health")
