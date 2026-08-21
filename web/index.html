@@ -742,8 +742,12 @@ async function sendAudio(b64) {
         setStage(''); setHint('按住说话 · 松开识别');
         break;
       case 'vad_state':
-        // 语义 VAD 状态（可插拔：rule | omni）——显示在状态行，供验证语义判断
-        setStage(`🧠 语义VAD(${d.vad}): ${d.state}`);
+        // 语义 VAD 状态（可插拔：rule | omni）——显示在用户消息气泡上（持久可见）
+        if (userMsg) {
+          userMsg.insertAdjacentHTML('beforeend',
+            `<span class="tag">🧠 语义VAD(${d.vad}): ${d.state}</span>`);
+        }
+        setStage('🧠 语义VAD(' + d.vad + '): ' + d.state);
         break;
       case 'error':
         setStage('❌ ' + (d.msg || '错误'));
