@@ -193,6 +193,7 @@ let contVadQueue = [];         // 待推理的 512 帧队列（rAF 消费）
 const SILERO_THRESHOLD = 0.5;  // 与桌面 RuleVadJudge 阈值一致
 const CONT_MIN_SPEECH_MS = 250;  // 与桌面 min_speech_ms 一致
 const CONT_SILENCE_MS = 800;     // 判停：停顿 ≥800ms 视为说完（500ms 会抢答——中文口语停顿常超 500ms）
+const CONT_SILENCE_BARGE_MS = 300;  // 播放中插话短判停（刻意行为，快速发送等语义判断）
 const CONT_SILERO_SR = 16000;
 // 抗背景人声/噪声双钳制（对齐桌面 RuleVadJudge：窗口 10 帧 80% + 能量门限）
 const CONT_VOTE_WIN = 10;        // 投票窗口（帧）
@@ -357,8 +358,8 @@ async function contLoop() {
       contVoiceMs = 0; contLowVoteMs = 0;
       if (contVoice) {
         contSilenceMs += dt;
-        // 判停：全静音 500ms（正常说完）
-        if (contSilenceMs >= CONT_SILENCE_MS) {
+        // 判停：全静音 800ms（正常说完）；播放中插话 300ms 短判停（快速发送等语义判断）
+        if (contSilenceMs >= (isReplying ? CONT_SILENCE_BARGE_MS : CONT_SILENCE_MS)) {
           contVoice = false; contSilenceMs = 0;
           contCoolUntil = Date.now() + 2000;   // 冷却：防环境音判停后立即再触发
           contJudgeMs = Date.now() - contLastSpeechTs;   // 判停时长：语音结束→确认说完（显示'判停'）
@@ -431,10 +432,10 @@ async function flushContSegment() {
     return;
   }
   if (isReplying) {
-    // barge-in：用户说话打断 AI 播放（耳机场景无回声；外放场景 AEC + server
-    // is_tts_echo 兜底——ASR 文本与播放内容逐字相似才过滤，正常插话不误杀）
-    vlog('INFO', 'FLUSH', '插话打断播放（barge-in）', { frames: pcm.length });
-    stopAllPlayback();
+    // 播放中检测到语音：不立即打断（backchannel 应声不该砍播放）——先发送，
+    // 语义 VAD 确认 complete/barge_in 后才停播（vad_state 事件处理），
+    // backchannel/noise/echo 继续播（无感）
+    vlog('INFO', 'FLUSH', '播放中语音：发送待语义判断', { frames: pcm.length });
   }
   vlog('INFO', 'FLUSH', '发送段', { frames: pcm.length, ms: Math.round(pcm.length / 16) });
   setStage('🎤 识别中…'); setHint('持续聆听中…');
@@ -786,6 +787,14 @@ async function sendAudio(b64) {
             `<span class="tag">🧠 语义VAD(${d.vad}): ${d.state}</span>`);
         }
         setStage('🧠 语义VAD(' + d.vad + '): ' + d.state);
+        // 播放中插话的打断决策（语义确认后才打断）：
+        // complete/barge_in → 停播接管；backchannel/noise/echo/reject → 继续播（无感）
+        if (d.state === 'complete' || d.state === 'barge_in') {
+          if (isReplying) {
+            vlog('INFO', 'PLAY', '语义确认打断', { state: d.state });
+            stopAllPlayback();
+          }
+        }
         break;
       case 'error':
         setStage('❌ ' + (d.msg || '错误'));
