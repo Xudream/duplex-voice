@@ -157,6 +157,7 @@ let mediaRecorder = null, chunks = [], recording = false, busy = false;
 let sendEndEpoch = 0;   // 发送时刻"人说完"快照（全局——pumpStream/playNow 算响应用；sendAudio 里每轮赋值）
 let audioCtx = null, analyser = null, animId = null;
 let playQueue = {};   // 句子音频队列（idx → Audio）
+let streamWaitIdx = null;   // 等待流式承接语播完的 playQueue 慢句 idx（防快慢重叠）
 let metrics = {};     // 各阶段时延（asr_text/asr_final/silence/slow_first/tts_first/total）
 let turnId = 0;       // 对话轮次（metrics 归属校验：done 后残留播放链的 playNow 不得污染下一轮）
 let speechStartEpoch = 0, speechEndEpoch = 0;   // 人开始说话/说完话的 epoch 毫秒（时延基准）
@@ -765,6 +766,16 @@ function finishStream(idx) {
   streamFinished[idx] = true;
   const next = idx + 1;
   if (streamStates[next] && !streamFinished[next]) pumpStream(next);   // 句间接播
+  // 流式句播完 → 触发等待的 playQueue 慢句（整段等流式承接语——防快慢重叠）
+  if (streamWaitIdx != null && streamStates[streamWaitIdx] == null) {
+    const a = playQueue[streamWaitIdx];
+    if (a) {
+      playQueue[streamWaitIdx] = undefined;
+      vlog('INFO', 'PLAY', '流式承接语播完→接播慢句', { idx: streamWaitIdx, ts: Date.now() });
+      a.play().then(() => { isReplying = true; }).catch(e => { isReplying = false; vlog('WARN', 'PLAY', '慢句播放失败', { err: String(e).slice(0, 80) }); });
+    }
+    streamWaitIdx = null;
+  }
   if (Object.keys(streamStates).every(i => streamFinished[i])) {
     isReplying = false;   // 全部流式句播完
     if (playQueue && Object.keys(playQueue).length === 0) setStage('');
@@ -784,7 +795,7 @@ function stopAllPlayback() {
     st.sources.forEach(s => { try { s.stop(); s.onended = null; } catch (e) {} });
     st.sources = []; st.playing = false;
   });
-  streamStates = {}; streamFinished = {};
+  streamStates = {}; streamFinished = {}; streamWaitIdx = null;
   isReplying = false;
 }
 async function sendAudio(b64) {
@@ -929,7 +940,13 @@ async function sendAudio(b64) {
         // 前驱缺失或已播完（ended/播过暂停）→ 立即播；否则挂前驱 ended 接播。
         // 修复竞态：慢句子晚到时承接语可能已播完，addEventListener 挂在已 ended 的
         // Audio 上永不触发 → 之前慢通道有文字没声音。
-        if (!prev || prev.ended || (prev.paused && prev.currentTime > 0)) {
+        const st0 = streamStates[0];   // 流式承接语播放状态（idx=0 走 pumpStream 不走 playQueue）
+        if (!prev && st0 && st0.playing) {
+          // 承接语是流式（pumpStream 在播）→ 挂其播完（finishStream 触发），防快慢重叠
+          isReplying = true;
+          streamWaitIdx = idx;
+          vlog('INFO', 'PLAY', '慢句等流式承接语播完', { idx, ts: Date.now() });
+        } else if (!prev || prev.ended || (prev.paused && prev.currentTime > 0)) {
           isReplying = true;   // 有音频要播 → 回声抑制生效
           playNow();
         } else {
