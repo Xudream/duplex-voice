@@ -654,6 +654,8 @@ async function sendAudio(b64) {
   setStage('<span class="spinner"></span>上传音频…');
   let userMsg = null, aiMsg = null, aiHtml = '';
   metrics = { turn: ++turnId };   // 本轮新 metrics（done 后残留播放链写入的旧值不污染本轮）
+  const sendEndEpoch = speechEndEpoch;   // 发送时刻"人说完"快照——playNow 用它算响应
+                                         // （全局 speechEndEpoch 会被后续判停覆盖，导致响应假值）
   tSendStart = performance.now();   // 请求发出时刻（上传+ASR 处理时延起点）
   // 超时保护：慢通道异常/网络卡死时 30s 强制恢复（防 busy 永久占用导致后续说话全被丢弃）
   const ac = new AbortController();
@@ -756,7 +758,7 @@ async function sendAudio(b64) {
         // play 成功才算在播（失败→解除抑制，防卡死导致后续段全被丢弃）
         const playNow = () => {
           if (metrics.tts_play == null && metrics.turn === turnId) {
-            metrics.tts_play = Date.now() - speechEndEpoch;   // 说完话→开始播放（感知响应时延）
+            metrics.tts_play = Date.now() - sendEndEpoch;   // 说完话→开始播放（用发送时快照，防全局被覆盖）
             vlog('INFO', 'PLAY', '首个音频播放', { idx, ts: Date.now(), speechEndEpoch, tts_play: metrics.tts_play });
           }
           return a.play().then(() => { isReplying = true; }).catch(() => { isReplying = false; });
@@ -795,9 +797,13 @@ async function sendAudio(b64) {
         setStage(''); setHint('按住说话 · 松开识别');
         break;
       case 'vad_incomplete':
-        // 语义 VAD 判断"没说完"：缓存待续，不触发回复——前端继续聆听（busy 在 SSE 结束时解除）
+        // 语义 VAD 判断"没说完"：缓存待续，不触发回复——前端继续聆听
+        // （busy 在 SSE 结束时解除；提示 3s 后自动恢复，不一直等待）
         setStage('🧠 还没说完，请继续…');
         setHint('继续说话');
+        setTimeout(() => {
+          if (!isReplying && !busy) setStage('');
+        }, 3000);
         break;
       case 'vad_state':
         // 语义 VAD 状态（可插拔：rule | omni）——显示在用户消息气泡上（持久可见）
@@ -823,7 +829,7 @@ async function sendAudio(b64) {
         break;
     }
   }
-  function fmt(ms) { return ms == null ? '-' : (ms >= 1000 ? (ms/1000).toFixed(1) + 's' : ms + 'ms'); }
+  function fmt(ms) { return ms == null ? '-' : (ms = Math.round(ms), ms >= 1000 ? (ms/1000).toFixed(1) + 's' : ms + 'ms'); }
   function endBusy() {
     busy = false; btn.disabled = false; btn.classList.remove('thinking');
     micIcon.textContent = '🎤'; setHint('按住说话 · 松开识别');

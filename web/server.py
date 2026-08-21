@@ -253,7 +253,7 @@ HISTORIES: dict[str, list[dict]] = {}
 LAST_REPLY: dict[str, list[str]] = {}   # client_id → 最近实际播放文本列表 [承接语, 完整回复]
 PENDING_INCOMPLETE: dict[str, dict] = {}  # client_id → {text, ts} 未说完段缓存（incomplete 等待续说）
 MAX_HISTORY = 20
-PENDING_TTL_S = 30   # incomplete 缓存 30s 无续说则过期丢弃
+PENDING_TTL_S = 3   # incomplete 缓存 3s 无续说则过期丢弃（用户要求：没说完等 3s 就行，不要一直等）
 FRONTEND_LOGS: deque[str] = deque(maxlen=3000)   # 前端自动上报日志（定位问题用）
 
 asr = Qwen3ASRProvider(host=HOST, api_key=KEY, model=ASR_MODEL)
