@@ -774,7 +774,7 @@ async function sendAudio(b64) {
         aiMsg.innerHTML = aiHtml;
         setStage('🔊 播放回复…');
         (metrics.tts = metrics.tts || []).push(d.latency_ms);
-        if (metrics.tts_comp == null) metrics.tts_comp = d.latency_ms;   // TTS 合成时延（收到文字→音频就绪）
+        if (metrics.tts_comp == null) metrics.tts_comp = d.latency_ms - (d.dl_ms || 0);   // TTS 合成（纯合成 API，不含公网下载——下载单独显示）
         if (d.dl_ms != null) metrics.tts_dl = d.dl_ms;   // 公网下载时延（云端 URL → 本地缓存，抖动单独显示）
         if (metrics.tts_first == null) {
           metrics.tts_first = Date.now() - speechEndEpoch;  // 人说完话→首个音频就绪（端到端）
