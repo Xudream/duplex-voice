@@ -113,36 +113,42 @@ class OmniVadJudge(VadJudge):
             return VadState.TTS_ECHO, "tts_echo sim>0.7(rule)"
         try:
             playing = "是" if is_replying else "否"
-            system = (
-                "你是全双工语音对话系统的语义 VAD（语音活动检测）。给定用户语音转写文本、"
-                "AI 最近播放的回复、对话历史，判断用户当前状态。只输出 JSON，不要其他内容："
-                '{"state": "complete|incomplete|backchannel|barge_in|noise|tts_echo|reject", "reason": "简短理由"}'
-                "\n\n状态定义："
-                "- complete：用户说完完整指令/问题，等待系统回复"
-                "- incomplete：语义不完整，明显没说完"
-                "- backchannel：仅应声词（嗯/对/好/明白）无新内容，系统不应回应"
-                "- barge_in：用户打断 AI 播放且内容完整（有新指令），系统应立即接管"
-                "- noise：无意义内容/转录噪声/幻觉（如'谢谢观看''请订阅'）"
-                "- tts_echo：内容与 AI 刚播放的回复几乎逐字一致（麦克风拾取 AI 声音的回声）"
-                "- reject：听不清/不理解（用户请求重复，如'什么？''再说一遍'）"
-                "\n\n关键规则："
-                f"- 当前 AI 是否正在播放回复：{playing}（这是权威状态，即使播放历史为空也以此为准）"
-                "- 若'正在播放'（是）且用户内容为完整新指令 → 判定 barge_in（不是 complete），无论播放历史是否为空"
-                "- 若'不在播放'（否）且内容完整 → 判定 complete"
-            )
-            user = (
-                f"AI 最近播放的回复：{json.dumps(list(last_replies or []), ensure_ascii=False)}\n"
-                f"对话历史（最近3轮）：{json.dumps([m for m in history[-6:] if m.get('role') == 'user'][-3:] or history[-3:], ensure_ascii=False)}\n"
-                f"用户语音转写：{text}\n"
-                "请判断状态："
-            )
-            body = {
-                "model": self.MODEL,
-                "messages": [{"role": "system", "content": system},
-                             {"role": "user", "content": user}],
-                "temperature": 0.0,
-                "max_tokens": 64,
-            }
+        except Exception:
+            playing = "否"
+        system = (
+            "你是全双工语音对话系统的语义 VAD（语音活动检测）。给定用户语音转写文本、"
+            "AI 最近播放的回复、对话历史，判断用户当前状态。只输出 JSON，不要其他内容："
+            '{"state": "complete|incomplete|backchannel|barge_in|noise|tts_echo|reject", "reason": "简短理由"}'
+            "\n\n状态定义："
+            "- complete：用户说完完整指令/问题，等待系统回复"
+            "- incomplete：语义不完整，明显没说完"
+            "- backchannel：仅应声词（嗯/对/好/明白）无新内容，系统不应回应"
+            "- barge_in：用户打断 AI 播放且内容完整（有新指令），系统应立即接管"
+            "- noise：无意义内容/转录噪声/幻觉——典型如：环境音/背景人声的转写"
+            "（'要么就是整张图的分布''整张图的分布'这类无指令意图的句子）、"
+            "平台话术（'谢谢观看''请订阅'）、笑声（'哈哈'）、无明确意图的碎片句"
+            "- tts_echo：内容与 AI 刚播放的回复几乎逐字一致（麦克风拾取 AI 声音的回声）"
+            "- reject：听不清/不理解（用户请求重复，如'什么？''再说一遍'）"
+            "\n\n关键规则："
+            f"- 当前 AI 是否正在播放回复：{playing}（这是权威状态，即使播放历史为空也以此为准）"
+            "- 若'正在播放'（是）且用户内容为完整新指令 → 判定 barge_in（不是 complete），无论播放历史是否为空"
+            "- 若'不在播放'（否）且内容完整 → 判定 complete"
+            "- 若内容无明确指令意图（环境音转写/无意义句）→ 判定 noise（不是 complete/incomplete）"
+        )
+        user = (
+            f"AI 最近播放的回复：{json.dumps(list(last_replies or []), ensure_ascii=False)}\n"
+            f"对话历史（最近3轮）：{json.dumps([m for m in history[-6:] if m.get('role') == 'user'][-3:] or history[-3:], ensure_ascii=False)}\n"
+            f"用户语音转写：{text}\n"
+            "请判断状态："
+        )
+        body = {
+            "model": self.MODEL,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "temperature": 0.0,
+            "max_tokens": 64,
+        }
+        try:
             r = await _post_json(f"https://{self.host}/compatible-mode/v1/chat/completions",
                                  headers={"Authorization": f"Bearer {self.api_key}"}, json=body,
                                  timeout=8.0)
@@ -153,7 +159,20 @@ class OmniVadJudge(VadJudge):
                 return await self._fallback.judge(text, history, last_replies)
             return state, content[:60]
         except Exception as e:
-            log.warning("VADJUDGE cid=- omni 调用失败(%s) → 回退 rule", str(e)[:80])
+            # 失败重试一次（瞬时超时/网络抖动可恢复——避免回退 rule 把环境音
+            # 长句误判 complete 触发完整回复，实测 11.3s 噪音回复即此根因）
+            try:
+                log.warning("VADJUDGE cid=- omni 调用失败(%s) → 重试", str(e)[:80])
+                r = await _post_json(f"https://{self.host}/compatible-mode/v1/chat/completions",
+                                     headers={"Authorization": f"Bearer {self.api_key}"}, json=body,
+                                     timeout=8.0)
+                content = r["choices"][0]["message"]["content"]
+                state = _extract_state(content)
+                if state is not None:
+                    return state, content[:60]
+            except Exception:
+                pass
+            log.warning("VADJUDGE cid=- omni 重试仍失败 → 回退 rule")
             return await self._fallback.judge(text, history, last_replies)
 
 
