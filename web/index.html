@@ -154,6 +154,7 @@ const VAD_BEHAVIOR = {
 const vadBehavior = () => VAD_BEHAVIOR[vadMode] || VAD_BEHAVIOR.rule;
 
 let mediaRecorder = null, chunks = [], recording = false, busy = false;
+let pendingBusy = null;   // busy（回复生成中）期缓存的真实语音段——回复完成后作为新指令发送（不静默丢弃）
 let sendEndEpoch = 0;   // 发送时刻"人说完"快照（全局——pumpStream/playNow 算响应用；sendAudio 里每轮赋值）
 let audioCtx = null, analyser = null, animId = null;
 let playQueue = {};   // 句子音频队列（idx → Audio）
@@ -470,7 +471,12 @@ async function flushContSegment() {
   contPcm = []; contSegSpeech = 0; contSegTotal = 0;
   if (!contMode) return;
   if (busy) {
-    vlog('WARN', 'FLUSH', '丢弃：busy（回复生成中）', { frames: pcm.length });
+    // busy（回复生成中）时段的真实语音段不静默丢弃——缓存，回复完成后
+    // 作为新指令发送（用户等不及的追问/打断，如"快一点"）。已通过
+    // 语音占比/能量/时长过滤（prob 0.94 的段=真实语音；回声段已被
+    // isReplying 分支与回声过滤拦截）。多段覆盖保留最新（最近意图）。
+    pendingBusy = { pcm, ts: Date.now() };
+    vlog('WARN', 'FLUSH', 'busy 期语音：缓存待回复完成后发送（不丢弃）', { frames: pcm.length, ms: Math.round(pcm.length / 16) });
     return;
   }
   if (isReplying) {
@@ -490,6 +496,7 @@ async function flushContSegment() {
 }
 function stopContMode() {
   contMode = false;
+  pendingBusy = null;   // 停止聆听——busy 期缓存段作废
   vlog('INFO', 'MODE', '持续对话关闭');
   if (contAnimId) cancelAnimationFrame(contAnimId); contAnimId = null;
   if (contProc) { try { contProc.disconnect(); } catch (e) {} contProc = null; }
@@ -987,6 +994,16 @@ async function sendAudio(b64) {
         };
         break;
       case 'done':
+        // busy 期缓存的语音段（用户等不及的追问）——回复完成后作为新指令发送。
+        // setTimeout 延后：done 处理时 busy 仍 true（endBusy 在流结束后），
+        // 200ms 后 busy=false 且播放链已建立，sendAudio 可正常走新轮。
+        if (pendingBusy && Date.now() - pendingBusy.ts < 60000) {
+          const pb = pendingBusy; pendingBusy = null;
+          vlog('INFO', 'FLUSH', 'busy 期缓存段：回复完成，作为新指令发送', { frames: pb.pcm.length, ms: Math.round(pb.pcm.length / 16) });
+          setTimeout(() => {
+            if (!busy) sendAudio(pcmToWavBase64(pb.pcm)).catch(e => vlog('WARN', 'SEND', '缓存段发送失败', { err: String(e).slice(0, 80) }));
+          }, 200);
+        }
         // 总计=说完话→开始播放（感知响应时延）；若 done 先于播放到达（承接语未播），
         // 用 done 时刻兜底，播放开始时 playNow 会更新 tts_play（见 tts_sentence 分支）
         if (metrics.tts_play == null) metrics.tts_play = Date.now() - speechEndEpoch;
