@@ -96,6 +96,33 @@
   .vad-info { font-size: 11px; color: var(--text-dim); margin-top: 8px; min-height: 14px;
     font-family: ui-monospace, Menlo, monospace; opacity: .8; }
   .err { color: var(--red); }
+/* ---- 详细配置面板 ---- */
+.cfg-modal { position: fixed; inset: 0; background: rgba(15, 18, 35, 0.5); z-index: 99; display: flex; align-items: center; justify-content: center; }
+.cfg-modal[hidden] { display: none !important; }   /* hidden 属性必须显式覆盖（display:flex 会压掉默认 none） */
+.cfg-card { background: #fff; border-radius: 14px; width: min(780px, 94vw); max-height: 88vh; display: flex; flex-direction: column; box-shadow: 0 14px 48px rgba(0,0,0,0.28); font-size: 13px; color: #1f2430; }
+.cfg-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; border-bottom: 1px solid #e5e7eb; font-weight: 600; font-size: 15px; }
+.cfg-close { border: none; background: none; font-size: 16px; cursor: pointer; color: #6b7280; padding: 2px 8px; border-radius: 6px; }
+.cfg-close:hover { background: #f3f4f6; }
+.cfg-tabs { display: flex; gap: 4px; padding: 8px 14px 0; border-bottom: 1px solid #e5e7eb; }
+.cfg-tab { border: none; background: none; padding: 8px 16px; cursor: pointer; border-radius: 8px 8px 0 0; font-size: 13px; color: #4b5563; }
+.cfg-tab.on { background: #eef2ff; color: #1e2761; font-weight: 600; box-shadow: inset 0 -2px 0 #1e2761; }
+.cfg-body { padding: 14px 18px; overflow-y: auto; flex: 1; }
+.cfg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+.cfg-field { display: flex; flex-direction: column; gap: 4px; }
+.cfg-field.full { grid-column: 1 / -1; }
+.cfg-field label { font-size: 12px; color: #6b7280; }
+.cfg-field input, .cfg-field select { padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 13px; outline: none; }
+.cfg-field input:focus { border-color: #1e2761; }
+.cfg-field textarea { padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 12px; font-family: inherit; min-height: 90px; resize: vertical; outline: none; line-height: 1.5; }
+.cfg-sec { font-weight: 600; color: #1e2761; margin: 10px 0 6px; font-size: 13px; grid-column: 1 / -1; border-bottom: 1px dashed #e5e7eb; padding-bottom: 4px; }
+.cfg-foot { display: flex; align-items: center; gap: 8px; padding: 10px 18px; border-top: 1px solid #e5e7eb; }
+.cfg-msg { flex: 1; font-size: 12px; color: #059669; }
+.cfg-btn { padding: 7px 16px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; font-size: 13px; }
+.cfg-btn.primary { background: #1e2761; color: #fff; border-color: #1e2761; }
+.cfg-btn.primary:hover { background: #2a3678; }
+.cfg-btn:hover { background: #f3f4f6; }
+.cfg-hint { font-size: 11px; color: #9ca3af; margin-top: 2px; }
+.cfg-preset-ta { width: 100%; min-height: 180px; font-family: ui-monospace, monospace; font-size: 11px; padding: 8px; border: 1px solid #d1d5db; border-radius: 8px; }
 </style>
 </head>
 <body>
@@ -126,10 +153,32 @@
     <button class="cont-btn" id="fusionBtn" disabled title="切换回复融合（快慢融合 / 慢回复直达）">🎙 融合: …</button>
     <button class="cont-btn" id="ttsBtn" disabled title="切换 TTS（stream 流式 / batch 整段）">🎵 TTS: …</button>
     <button class="cont-btn" id="sceneBtn" disabled title="切换收音场景（🎧 耳机近讲 / 🔊 扬声器外放——外放时播放期收音策略不同）">🎧 场景: …</button>
+    <button class="cont-btn" id="cfgBtn" title="详细配置（模型/prompt/VAD 参数/场景）">⚙️ 配置</button>
     <div class="hint" id="hint">按住说话 · 松开识别</div>
   </div>
   <div class="vad-info" id="vadInfo"></div>
 </footer>
+
+<!-- 详细配置面板（模型/prompt/VAD 参数/场景——保存即热生效） -->
+<div id="cfgModal" class="cfg-modal" hidden>
+  <div class="cfg-card">
+    <div class="cfg-head"><span>⚙️ 详细配置</span><button id="cfgClose" class="cfg-close" title="关闭">✕</button></div>
+    <div class="cfg-tabs">
+      <button class="cfg-tab on" data-tab="models">模型</button>
+      <button class="cfg-tab" data-tab="prompts">Prompt</button>
+      <button class="cfg-tab" data-tab="vad">VAD 参数</button>
+      <button class="cfg-tab" data-tab="scenes">场景</button>
+      <button class="cfg-tab" data-tab="presets">预设</button>
+    </div>
+    <div class="cfg-body" id="cfgBody"></div>
+    <div class="cfg-foot">
+      <span class="cfg-msg" id="cfgMsg"></span>
+      <button id="cfgSave" class="cfg-btn primary">保存并生效</button>
+      <button id="cfgReset" class="cfg-btn">恢复默认</button>
+      <button id="cfgCancel" class="cfg-btn">取消</button>
+    </div>
+  </div>
+</div>
 
 <script src="/vendor/ort.min.js"></script>
 <script>
@@ -142,7 +191,8 @@ let ttsMode = null;   // 当前 TTS 模式（stream | batch）
 let sceneMode = localStorage.getItem('voice_scene') || 'headset';   // 收音场景（耳机近讲/扬声器外放）——localStorage 持久化
 
 // 收音场景行为注册表（可插拔——每场景独立完整参数，互不污染；切换时重置全部播放期状态）
-const SCENE_BEHAVIOR = {
+// let：可被 config.json frontend.scenes 覆盖（界面详细配置）
+let SCENE_BEHAVIOR = {
   // 🎧 耳机近讲：无回声漏音 → TTS 声被基线吸收不误触发；人声叠加突增持续 ≥400ms 才
   //   停播，停播后靠静音判停切段（无回声可正常判停）——cutOnSurge=false 不主动切段
   headset: {
@@ -175,7 +225,8 @@ const sceneBehavior = () => SCENE_BEHAVIOR[sceneMode] || SCENE_BEHAVIOR.headset;
 // bargeIn: 'immediate' = 播放中检测语音立即打断（声学 VAD 原行为）
 //          'semantic'  = 语义确认后才打断（backchannel 应声不砍播放）
 // silenceMs: 播放中插话的判停时长（semantic 模式用短判停快速发送等判断）
-const VAD_BEHAVIOR = {
+// let：可被 config.json frontend.behavior 覆盖（界面详细配置）
+let VAD_BEHAVIOR = {
   rule: { bargeIn: 'immediate', silenceMs: 800 },   // 声学 VAD
   omni: { bargeIn: 'semantic', silenceMs: 800 },    // 语义 VAD：判停 800ms——300ms 会把句中自然停顿
                                                     // 当说完切半截话（实测播放期段仅 400-800ms → 碎片
@@ -184,6 +235,58 @@ const VAD_BEHAVIOR = {
 };
 // null/未知模式 → rule 保守行为（页面加载中、未注册的 VAD）
 const vadBehavior = () => VAD_BEHAVIOR[vadMode] || VAD_BEHAVIOR.rule;
+
+// ---- 前端参数应用（config.json frontend 段——界面详细配置保存后下发 / 启动加载）----
+function applyFrontendConfig(fe) {
+  if (!fe) return;
+  const v = fe.vad || {};
+  if (v.silero_threshold != null) SILERO_THRESHOLD = v.silero_threshold;
+  if (v.silence_ms != null) CONT_SILENCE_MS = v.silence_ms;
+  if (v.vote_in != null) CONT_VOTE_MIN = v.vote_in;
+  if (v.vote_exit != null) CONT_VOTE_EXIT = v.vote_exit;
+  if (v.energy_ratio != null) ENERGY_RATIO = v.energy_ratio;
+  if (v.energy_floor_frame != null) ENERGY_FLOOR_FRAME = v.energy_floor_frame;
+  if (v.energy_floor_seg != null) ENERGY_FLOOR_SEG = v.energy_floor_seg;
+  if (v.seg_speech_min_ratio != null) SEG_SPEECH_MIN_RATIO = v.seg_speech_min_ratio;
+  if (v.env_silence_ms != null) VAD_ENV_SILENCE_MS = v.env_silence_ms;
+  if (v.max_seg_ms != null) VAD_MAX_SEG_MS = v.max_seg_ms;
+  if (v.cooldown_ms != null) VAD_COOLDOWN_MS = v.cooldown_ms;
+  if (v.pre_roll_ms != null) VAD_PRE_ROLL_FRAMES = Math.round(v.pre_roll_ms * 16);   // ms → 16k 帧
+  if (fe.scenes) {
+    for (const [k, sc] of Object.entries(fe.scenes)) {
+      if (SCENE_BEHAVIOR[k]) {
+        // config 的 pre_roll_ms 是毫秒——转帧后覆盖 preRollMs（内部用帧）
+        if (sc.pre_roll_ms != null) sc.preRollMs = Math.round(sc.pre_roll_ms * 16);
+        Object.assign(SCENE_BEHAVIOR[k], sc);
+      }
+    }
+  }
+  if (fe.behavior) {
+    for (const [k, b] of Object.entries(fe.behavior)) {
+      if (VAD_BEHAVIOR[k]) Object.assign(VAD_BEHAVIOR[k], b);
+    }
+  }
+  if (fe.busy_ttl_ms != null) BUSY_TTL_MS = fe.busy_ttl_ms;
+  vlog('INFO', 'CFG', '前端参数已应用', {
+    vad: { silence: CONT_SILENCE_MS, vote: [CONT_VOTE_MIN, CONT_VOTE_EXIT], preRoll: VAD_PRE_ROLL_FRAMES },
+    scenes: Object.keys(fe.scenes || {}),
+  });
+}
+
+// 启动加载：localStorage 缓存立即应用（刷新不等 API）→ API 拉最新（界面保存后同步）
+function loadFrontendConfig() {
+  try {
+    const cached = localStorage.getItem('voice_fe_config');
+    if (cached) applyFrontendConfig(JSON.parse(cached));
+  } catch (e) { /* 缓存损坏忽略 */ }
+  fetch('/api/config').then(r => r.json()).then(d => {
+    if (d.ok && d.config && d.config.frontend) {
+      applyFrontendConfig(d.config.frontend);
+      try { localStorage.setItem('voice_fe_config', JSON.stringify(d.config.frontend)); } catch (e) {}
+    }
+  }).catch(() => {});
+}
+loadFrontendConfig();
 
 let mediaRecorder = null, chunks = [], recording = false, busy = false;
 let pendingBusy = null;   // busy（回复生成中）期缓存的真实语音段——回复完成后作为新指令发送（不静默丢弃）
@@ -248,22 +351,26 @@ let contProc = null;           // ScriptProcessor（不重叠 PCM 采集，替�
 let contPcm = [];              // 16k Float32 录音累积（切段时组装 wav 发送）
 let contVadPcm = [];           // 16k 累积（VAD 512 帧切分）
 let contVadQueue = [];         // 待推理的 512 帧队列（rAF 消费）
-const SILERO_THRESHOLD = 0.5;  // 与桌面 RuleVadJudge 阈值一致
 const CONT_MIN_SPEECH_MS = 250;  // 与桌面 min_speech_ms 一致
-const CONT_SILENCE_MS = 800;     // 判停：停顿 ≥800ms 视为说完（500ms 会抢答——中文口语停顿常超 500ms）
 const CONT_SILERO_SR = 16000;
-// 抗背景人声/噪声双钳制（对齐桌面 RuleVadJudge：窗口 10 帧 80% + 能量门限）
-const CONT_VOTE_WIN = 10;        // 投票窗口（帧）
-const CONT_VOTE_MIN = 7;         // 进入语音 ≥70%（未激活时严格）
-const CONT_VOTE_EXIT = 5;        // 退出语音 <50%（滞回：语音中短停顿不中断）
-const ENERGY_RATIO = 4.0;        // 帧能量需 > 噪声底 × 4（挡 20 倍+衰减远场人声，不误杀轻声）
-const ENERGY_FLOOR_FRAME = 0.005;  // 帧级能量下限（宽松：轻声/近麦弱信号可触发）
-const ENERGY_FLOOR_SEG = 0.012;    // 段级能量下限（严格：用户语音峰值块 0.03+ 通过；背景人声 0.008 被挡）
+// 以下 VAD 常量可被 config.json frontend.vad 覆盖（界面详细配置）——let 可变
+let SILERO_THRESHOLD = 0.5;      // 与桌面 RuleVadJudge 阈值一致
+let CONT_SILENCE_MS = 800;       // 判停：停顿 ≥800ms 视为说完（500ms 会抢答——中文口语停顿常超 500ms）
+let CONT_VOTE_MIN = 7;           // 进入语音 ≥70%（未激活时严格）
+let CONT_VOTE_EXIT = 5;          // 退出语音 <50%（滞回：语音中短停顿不中断）
+let ENERGY_RATIO = 4.0;          // 帧能量需 > 噪声底 × 4（挡 20 倍+衰减远场人声，不误杀轻声）
+let ENERGY_FLOOR_FRAME = 0.005;  // 帧级能量下限（宽松：轻声/近麦弱信号可触发）
+let ENERGY_FLOOR_SEG = 0.012;    // 段级能量下限（严格：用户语音峰值块 0.03+ 通过；背景人声 0.008 被挡）
+let SEG_SPEECH_MIN_RATIO = 0.35; // 段内语音确认占比下限（低于→视为背景人声/噪声段）
+let VAD_ENV_SILENCE_MS = 2000;   // 判停：环境音（中等投票）持续 2s 切段
+let VAD_MAX_SEG_MS = 15000;      // 判停：超长段 15s 强制切段（防'一直聆听'卡死）
+let VAD_COOLDOWN_MS = 10000;     // 切段后冷却（防环境音立即再触发）
+let VAD_PRE_ROLL_FRAMES = 8000;  // 语音触发点前移 500ms（pre-roll，16k 帧——原行为；config pre_roll_ms=500）
+let BUSY_TTL_MS = 60000;         // busy 期缓存段有效期（回复完成后 60s 内发送）
 let contNoiseFloor = 0.005;      // 自适应噪声底（min 跟踪 + 缓慢上升）
 let contVoteWin = [];            // 最近 N 帧投票结果（0/1）
 let contSegSpeech = 0, contSegTotal = 0;   // 本段语音确认帧统计（占比过滤背景人声断续段）
 let contSegStart = 0;                      // 本段音频起点（语音触发时记录，切段从触发点取——排除播放期残留）
-const SEG_SPEECH_MIN_RATIO = 0.35;         // 段内语音确认占比下限（低于→视为背景人声/噪声段）
 
 async function initSilero() {
   try {
@@ -405,8 +512,8 @@ async function contLoop() {
       // 判停检查（isSpeech=true 时也执行——环境音 vote≥7 持续时 else 分支永远不进，
       // 若只放 else 会导致超长兜底永不触发、'聆听中'无限卡死）
       if (contVoice) {
-        const forceCut = (Date.now() - contVoiceSince > 15000);
-        if (contLowVoteMs >= 2000 || forceCut) {
+        const forceCut = (Date.now() - contVoiceSince > VAD_MAX_SEG_MS);
+        if (contLowVoteMs >= VAD_ENV_SILENCE_MS || forceCut) {
           const reason = forceCut ? '超长15s' : '环境音2s';
           const segFrames = contPcm.length - contSegStart;
           contVoice = false; contSilenceMs = 0; contLowVoteMs = 0;
@@ -419,7 +526,7 @@ async function contLoop() {
             // 超长段直接丢弃：环境音持续 15s 发出去会被 ASR 识别→回复→播放→再触发（循环）；
             // 用户正常指令 <15s，丢弃安全。冷却 10s 防环境音循环触发
             contPcm = []; contSegSpeech = 0; contSegTotal = 0;
-            contCoolUntil = Date.now() + 10000;
+            contCoolUntil = Date.now() + VAD_COOLDOWN_MS;
             vlog('WARN', 'FLUSH', '超长段丢弃（环境持续音）', { segFrames });
           } else {
             flushContSegment();
@@ -429,7 +536,7 @@ async function contLoop() {
       if (!contVoice && contVoiceMs >= CONT_MIN_SPEECH_MS && Date.now() > contCoolUntil) {
         contVoice = true; contVoiceMs = 0;
         contSegSpeech = 0; contSegTotal = 0;   // 语音确认起统计
-        contSegStart = Math.max(0, contPcm.length - 8000);   // pre-roll 250ms（触发前已说开头，防截断）
+        contSegStart = Math.max(0, contPcm.length - VAD_PRE_ROLL_FRAMES);   // 语音触发点前移（pre-roll）
         contVoiceSince = Date.now();
         speechStartEpoch = Date.now();   // VAD 确认语音=人开始说话（时延基准 t0）
         vlog('INFO', 'VAD', '语音开始', { prob: +prob.toFixed(2), rms: +rms.toFixed(4), vote });
@@ -667,6 +774,207 @@ sceneBtn.addEventListener('click', () => {
   setStage('🎧 场景切换: ' + (sceneMode === 'speaker' ? `扬声器外放（门槛${sc.surgeThreshold}·${sc.surgeMs}ms·音量${sc.ttsVolume}）` : `耳机近讲（门槛${sc.surgeThreshold}·${sc.surgeMs}ms·音量${sc.ttsVolume}）`));
   vlog('INFO', 'SCENE_SWITCH', '切换', { scene: sceneMode, cfg: sc });
 });
+
+// ---- 详细配置面板（模型/prompt/VAD/场景——保存即热生效）----
+const cfgModal = $('cfgModal'), cfgBody = $('cfgBody'), cfgMsg = $('cfgMsg');
+const cfgBtn = $('cfgBtn'), cfgClose = $('cfgClose'), cfgSave = $('cfgSave'), cfgReset = $('cfgReset'), cfgCancel = $('cfgCancel');
+let cfgState = null;              // 编辑中的配置（打开时从 API 拉取）
+let cfgTab = 'models';            // 当前 tab
+let cfgJsonDirty = false;         // 预设 tab 手动改过 JSON
+
+// 字段定义（path → [label, type]）——按 tab 分组
+const CFG_FIELDS = {
+  models: [
+    ['server.asr.model', 'ASR 模型', 'text'],
+    ['server.asr.ws_endpoint', 'ASR WS 端点', 'text'],
+    ['server.fast_llm.model', '快 LLM 模型（Ollama）', 'text'],
+    ['server.fast_llm.base_url', '快 LLM Base URL', 'text'],
+    ['server.fast_llm.max_chars', '快 LLM 承接语字数上限', 'number'],
+    ['server.slow_llm.model', '慢 LLM 模型', 'text'],
+    ['server.slow_llm.max_tokens', '慢 LLM max_tokens', 'number'],
+    ['server.omni.model', 'Omni 语义 VAD 模型', 'text'],
+    ['server.omni.temperature', 'Omni temperature', 'number'],
+    ['server.omni.max_tokens', 'Omni max_tokens', 'number'],
+    ['server.tts.batch_model', 'TTS 整段模型', 'text'],
+    ['server.tts.stream_model', 'TTS 流式模型', 'text'],
+    ['server.tts.voice', 'TTS 音色', 'text'],
+    ['server.tts.sample_rate', 'TTS 采样率', 'number'],
+  ],
+  prompts: [
+    ['server.fast_llm.prompt', '快 LLM 承接语 prompt（6-10 字）', 'textarea'],
+    ['server.slow_llm.prompt_fastslow', '慢 LLM prompt（快慢融合模式）', 'textarea'],
+    ['server.slow_llm.prompt_direct', '慢 LLM prompt（直达模式）', 'textarea'],
+    ['server.omni.prompt', 'Omni 语义 VAD prompt（{playing} 占位符可用）', 'textarea'],
+  ],
+  vad: [
+    ['frontend.vad.silero_threshold', 'Silero 阈值', 'number'],
+    ['frontend.vad.silence_ms', '静音判停（ms）', 'number'],
+    ['frontend.vad.vote_in', '进入语音投票 ≥', 'number'],
+    ['frontend.vad.vote_exit', '退出语音投票 <', 'number'],
+    ['frontend.vad.energy_ratio', '能量倍数（×噪声底）', 'number'],
+    ['frontend.vad.energy_floor_frame', '帧级能量下限', 'number'],
+    ['frontend.vad.energy_floor_seg', '段级能量下限', 'number'],
+    ['frontend.vad.seg_speech_min_ratio', '段内语音占比下限', 'number'],
+    ['frontend.vad.env_silence_ms', '环境音切段（ms）', 'number'],
+    ['frontend.vad.max_seg_ms', '超长段强制切段（ms）', 'number'],
+    ['frontend.vad.cooldown_ms', '切段冷却（ms）', 'number'],
+    ['frontend.vad.pre_roll_ms', 'pre-roll（ms）', 'number'],
+    ['frontend.vad.echo_sim', '回声相似度阈值', 'number'],
+    ['frontend.busy_ttl_ms', 'busy 缓存 TTL（ms）', 'number'],
+  ],
+  scenes: [
+    ['frontend.scenes.headset.surge_threshold', '🎧 耳机 突增倍数', 'number'],
+    ['frontend.scenes.headset.surge_ms', '🎧 耳机 持续时长（ms）', 'number'],
+    ['frontend.scenes.headset.tts_volume', '🎧 耳机 播放音量', 'number'],
+    ['frontend.scenes.headset.cut_on_surge', '🎧 耳机 突增即切段', 'bool'],
+    ['frontend.scenes.speaker.surge_threshold', '🔊 扬声器 突增倍数', 'number'],
+    ['frontend.scenes.speaker.surge_ms', '🔊 扬声器 持续时长（ms）', 'number'],
+    ['frontend.scenes.speaker.tts_volume', '🔊 扬声器 播放音量', 'number'],
+    ['frontend.scenes.speaker.cut_on_surge', '🔊 扬声器 突增即切段', 'bool'],
+  ],
+};
+
+const getPath = (obj, p) => p.split('.').reduce((o, k) => (o == null ? null : o[k]), obj);
+const setPath = (obj, p, v) => {
+  const ks = p.split('.'); const last = ks.pop();
+  const o = ks.reduce((o, k) => (o[k] = (o[k] ?? {}), o[k]), obj);
+  o[last] = v;
+};
+
+function cfgMsgTxt(t, err) { cfgMsg.textContent = t; cfgMsg.style.color = err ? '#dc2626' : '#059669'; }
+
+function renderCfgTab(tab) {
+  cfgTab = tab;
+  document.querySelectorAll('.cfg-tab').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  if (tab === 'presets') {
+    cfgBody.innerHTML = `<div class="cfg-grid">
+      <div class="cfg-field full"><label>当前完整配置（JSON）——可编辑后点「导入并生效」，或复制保存</label>
+      <textarea id="cfgJsonTa" class="cfg-preset-ta" spellcheck="false"></textarea></div>
+      <div class="cfg-field full"><div style="display:flex;gap:8px">
+        <button id="cfgImport" class="cfg-btn">导入并生效</button>
+        <button id="cfgCopy" class="cfg-btn">复制 JSON</button>
+        <button id="cfgExport" class="cfg-btn">下载 config.json</button>
+      </div></div></div>`;
+    const ta = $('cfgJsonTa');
+    ta.value = JSON.stringify(cfgState, null, 2);
+    ta.oninput = () => { cfgJsonDirty = true; };
+    $('cfgImport').onclick = () => {
+      try {
+        const parsed = JSON.parse(ta.value);
+        if (!parsed.server || !parsed.frontend) throw new Error('缺少 server/frontend 段');
+        cfgState = parsed; cfgJsonDirty = false;
+        cfgMsgTxt('已载入，点「保存并生效」应用');
+      } catch (e) { cfgMsgTxt('JSON 解析失败: ' + e.message, true); }
+    };
+    $('cfgCopy').onclick = () => {
+      navigator.clipboard.writeText(JSON.stringify(cfgState, null, 2))
+        .then(() => cfgMsgTxt('已复制'), () => cfgMsgTxt('复制失败', true));
+    };
+    $('cfgExport').onclick = () => {
+      const blob = new Blob([JSON.stringify(cfgState, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = 'config.json'; a.click();
+      URL.revokeObjectURL(a.href);
+    };
+    return;
+  }
+  const fields = CFG_FIELDS[tab] || [];
+  let html = '<div class="cfg-grid">';
+  fields.forEach(([path, label, type]) => {
+    const v = getPath(cfgState, path);
+    html += `<div class="cfg-field${type === 'textarea' ? ' full' : ''}">
+      <label>${label}</label>`;
+    if (type === 'textarea') {
+      html += `<textarea data-path="${path}" spellcheck="false">${(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')}</textarea>`;
+    } else if (type === 'bool') {
+      html += `<select data-path="${path}">
+        <option value="true" ${v ? 'selected' : ''}>是</option>
+        <option value="false" ${v ? '' : 'selected'}>否</option></select>`;
+    } else {
+      html += `<input type="${type === 'number' ? 'number' : 'text'}" step="${type === 'number' ? 'any' : ''}" data-path="${path}" value="${v ?? ''}">`;
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+  cfgBody.innerHTML = html;
+}
+
+function collectCfgFromForm() {
+  cfgBody.querySelectorAll('[data-path]').forEach(el => {
+    const p = el.dataset.path;
+    let v;
+    if (el.tagName === 'TEXTAREA') v = el.value;
+    else if (el.tagName === 'SELECT') v = el.value === 'true';
+    else if (el.type === 'number') v = el.value === '' ? '' : Number(el.value);
+    else v = el.value;
+    setPath(cfgState, p, v);
+  });
+}
+
+function openCfg() {
+  cfgMsgTxt('');
+  fetch('/api/config').then(r => r.json()).then(d => {
+    if (!d.ok) throw new Error(d.error || '加载失败');
+    cfgState = d.config;
+    renderCfgTab(cfgTab);
+    cfgModal.hidden = false;
+  }).catch(e => { cfgMsgTxt('加载配置失败: ' + e.message, true); });
+}
+
+function closeCfg() { cfgModal.hidden = true; }
+
+cfgBtn.onclick = openCfg;
+cfgClose.onclick = closeCfg;
+cfgCancel.onclick = closeCfg;
+cfgModal.addEventListener('click', e => { if (e.target === cfgModal) closeCfg(); });
+document.querySelectorAll('.cfg-tab').forEach(b => b.onclick = () => {
+  collectCfgFromForm();   // 切 tab 前收集（不丢已改值）
+  renderCfgTab(b.dataset.tab);
+});
+
+cfgSave.onclick = async () => {
+  collectCfgFromForm();
+  if (!cfgState.server || !cfgState.frontend) { cfgMsgTxt('配置结构不完整', true); return; }
+  cfgSave.disabled = true; cfgMsgTxt('保存中…');
+  try {
+    const resp = await fetch('/api/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: cfgState }),
+    });
+    const d = await resp.json();
+    if (!resp.ok || !d.ok) throw new Error(d.error || d.msg || 'HTTP ' + resp.status);
+    // 热生效成功：应用 frontend 段（前端参数立即生效）
+    applyFrontendConfig(d.frontend || {});
+    try { localStorage.setItem('voice_fe_config', JSON.stringify(d.frontend || {})); } catch (e) {}
+    cfgMsgTxt(`✅ 已保存并热生效（asr=${d.models.asr} · slow=${d.models.slow}）`);
+    vlog('INFO', 'CFG_SAVE', '配置保存', { models: d.models });
+  } catch (e) {
+    cfgMsgTxt('保存失败: ' + e.message, true);
+  } finally {
+    cfgSave.disabled = false;
+  }
+};
+
+cfgReset.onclick = async () => {
+  if (!confirm('恢复内置默认配置？当前自定义将被覆盖。')) return;
+  cfgReset.disabled = true;
+  try {
+    const resp = await fetch('/api/config/reset', { method: 'POST' });
+    const d = await resp.json();
+    if (!resp.ok || !d.ok) throw new Error(d.error || 'HTTP ' + resp.status);
+    applyFrontendConfig(d.frontend || {});
+    try { localStorage.setItem('voice_fe_config', JSON.stringify(d.frontend || {})); } catch (e) {}
+    cfgState = d.config;   // reset 响应没带 config——重新拉
+    const r2 = await fetch('/api/config');
+    const d2 = await r2.json();
+    if (d2.ok) { cfgState = d2.config; renderCfgTab(cfgTab); }
+    cfgMsgTxt('✅ 已恢复默认');
+  } catch (e) {
+    cfgMsgTxt('恢复默认失败: ' + e.message, true);
+  } finally {
+    cfgReset.disabled = false;
+  }
+};
 
 // ---- 阶段状态 ----
 function setStage(html) { stage.innerHTML = html; }
@@ -1066,7 +1374,7 @@ async function sendAudio(b64) {
         // busy 期缓存的语音段（用户等不及的追问）——回复完成后作为新指令发送。
         // setTimeout 延后：done 处理时 busy 仍 true（endBusy 在流结束后），
         // 200ms 后 busy=false 且播放链已建立，sendAudio 可正常走新轮。
-        if (pendingBusy && Date.now() - pendingBusy.ts < 60000) {
+        if (pendingBusy && Date.now() - pendingBusy.ts < BUSY_TTL_MS) {
           const pb = pendingBusy; pendingBusy = null;
           vlog('INFO', 'FLUSH', 'busy 期缓存段：回复完成，作为新指令发送', { frames: pb.pcm.length, ms: Math.round(pb.pcm.length / 16) });
           setTimeout(() => {
