@@ -42,10 +42,6 @@ from duplex_voice.adapter.tts_stream import Qwen3TTSStream
 HOST = "llm-5ienv5iasbci5bt7.cn-beijing.maas.aliyuncs.com"
 WEB_DIR = Path(__file__).resolve().parent
 TTS_CACHE = WEB_DIR / "tts_cache"   # 本地 TTS 音频缓存（server 代下载，前端播放不走公网）
-ASR_MODEL = "qwen3-asr-flash"
-SLOW_MODEL = "qwen3.5-27b"        # 实测 2026-08-20：首 token 454ms（稳定 0.42-0.55s）；qwen3.7-flash 同空间首 token 5.1s 平均（3.7-7.1s 波动）→ 换 27b
-FAST_MODEL = "qwen3.5:4b-mlx"       # Ollama 本地
-FAST_BASE = "http://127.0.0.1:11434"
 
 
 def _load_key() -> str:
@@ -61,6 +57,131 @@ def _load_key() -> str:
 
 KEY = _load_key()
 print(f"API key: {'已加载' if KEY else '缺失（export DASHSCOPE_API_KEY 或填 config.yaml）'}")
+
+# ==================== 配置系统（config.json 可配置化——模型/prompt/前端参数） ====================
+CONFIG_PATH = WEB_DIR / "config.json"
+
+DEFAULT_CONFIG: dict = {
+    "server": {
+        "asr": {"provider": "dashscope", "model": "qwen3-asr-flash",
+                "ws_endpoint": "api-ws", "sample_rate": 16000, "task": "asr"},
+        "fast_llm": {"provider": "ollama", "model": "qwen3.5:4b-mlx",
+                     "base_url": "http://127.0.0.1:11434", "max_chars": 10,
+                     "prompt": ("你是全双工语音助手的快速响应模块。用户说完话后，你只生成一句"
+                                "6-10 个字的简短的承接语（如'好的，正在为您处理'）。要求：口语化、"
+                                "有内容感、不提指令具体内容（防与慢回复重复）、不要标点符号。")},
+        "slow_llm": {"provider": "dashscope", "model": "qwen3.5-27b",
+                     "base_url": "", "max_tokens": 1024,
+                     "prompt_fastslow": ("你是智能家居语音助手，回复简洁口语化，不超过两句话。"
+                                         "注意：AI 已先用简短的过渡语（如'好的，马上为您处理'）回应过用户，"
+                                         "你回复时不要再说'好的''嗯''没问题'等开头客套，直接给出具体内容或结果。"
+                                         "要求首句尽量简短（15字内）直接给结果（首句短→TTS 合成快，避免播放停顿），"
+                                         "细节放第二句。"),
+                     "prompt_direct": ("你是智能家居语音助手，回复简洁口语化，不超过两句话。"
+                                       "首句直接给出核心结果，细节放第二句。")},
+        "omni": {"provider": "dashscope", "model": "qwen3.5-omni-flash",
+                 "temperature": 0, "max_tokens": 64,
+                 "prompt": ("你是全双工语音对话系统的语义 VAD（语音活动检测）。给定用户语音转写文本、"
+                            "AI 最近播放的回复、对话历史，判断用户当前状态。只输出 JSON，不要其他内容："
+                            '{"state": "complete|incomplete|backchannel|barge_in|noise|tts_echo|reject", "reason": "简短理由"}'
+                            "\n\n状态定义："
+                            "- complete：用户说完完整指令/问题，等待系统回复"
+                            "- incomplete：用户在对 AI 说话但被打断（有指令/问题意图、话没说完），"
+                            "如'打开客厅的'（未完的指令）"
+                            "- backchannel：仅应声词（嗯/对/好/明白）无新内容，系统不应回应"
+                            "- barge_in：用户打断 AI 播放且内容完整（有新指令），系统应立即接管"
+                            "- noise：无意义内容/转录噪声/幻觉——典型如：环境音/背景人声/与人闲聊的转写"
+                            "（'要么就是整张图的分布''这个地方实际上就是之前我们'这类无指令意图、"
+                            "像与人交谈的句子）、平台话术（'谢谢观看''请订阅'）、笑声（'哈哈'）、碎片句"
+                            "- tts_echo：内容与 AI 刚播放的回复几乎逐字一致（麦克风拾取 AI 声音的回声）"
+                            "- reject：听不清/不理解（用户请求重复，如'什么？''再说一遍'）"
+                            "\n\n关键规则："
+                            "- 当前 AI 是否正在播放回复：{playing}（这是权威状态，即使播放历史为空也以此为准）"
+                            "- 若'正在播放'（是）且用户内容为完整新指令 → 判定 barge_in（不是 complete），无论播放历史是否为空"
+                            "- 若'不在播放'（否）且内容完整 → 判定 complete"
+                            "- 判断是否'对 AI 的指令/问题'：有明确动作/请求意图（打开/关闭/帮我/讲/问/调…）"
+                            "→ 完整=complete，未完=incomplete"
+                            "- 无指令意图、像闲聊/陈述/与人交谈（'这个地方''实际上''之前我们'）→ 判定 noise"
+                            "（不是 incomplete——incomplete 是'对 AI 说话被打断'）"
+                            "- 拿不准时 → 判定 noise（宁可丢弃，不可误触发回复）")},
+        "tts": {"batch_model": "qwen3-tts-instruct-flash",
+                "stream_model": "qwen3-tts-instruct-flash-realtime",
+                "voice": "Cherry", "sample_rate": 24000},
+    },
+    "frontend": {
+        "vad": {"silero_threshold": 0.5, "silence_ms": 800, "vote_in": 7, "vote_exit": 5,
+                "energy_ratio": 4.0, "energy_floor_frame": 0.005, "energy_floor_seg": 0.012,
+                "seg_speech_min_ratio": 0.35, "env_silence_ms": 2000, "max_seg_ms": 15000,
+                "cooldown_ms": 10000, "pre_roll_ms": 500, "echo_sim": 0.7},
+        "scenes": {
+            "headset": {"surge_threshold": 2.2, "surge_floor": 0.008, "rms_floor": 0.02,
+                        "surge_ms": 400, "cut_on_surge": False, "pre_roll_ms": 250, "tts_volume": 1.0},
+            "speaker": {"surge_threshold": 1.6, "surge_floor": 0.006, "rms_floor": 0.015,
+                        "surge_ms": 200, "cut_on_surge": True, "pre_roll_ms": 250, "tts_volume": 0.6},
+        },
+        "behavior": {"rule": {"barge_in": "immediate", "silence_ms": 800},
+                     "omni": {"barge_in": "semantic", "silence_ms": 800},
+                     "soulx": {"barge_in": "semantic", "silence_ms": 800}},
+        "busy_ttl_ms": 60000,
+    },
+}
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """递归合并（override 缺失键保留 base 值）——config.json 部分覆盖安全。"""
+    out = dict(base)
+    for k, v in (override or {}).items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            out[k] = _deep_merge(base[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def _load_config() -> dict:
+    """读 config.json；缺失/损坏 → 回退内置默认（不覆盖损坏文件，日志告警）。"""
+    try:
+        if CONFIG_PATH.exists():
+            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            return _deep_merge(DEFAULT_CONFIG, raw)
+    except Exception as e:
+        print(f"[config] 读取失败，回退默认配置: {e}")
+    return _deep_merge(DEFAULT_CONFIG, {})
+
+
+def _save_config(cfg: dict) -> bool:
+    try:
+        CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception as e:
+        print(f"[config] 保存失败: {e}")
+        return False
+
+
+def _mask_cfg(cfg: dict) -> dict:
+    """返回给前端的配置（api_key 一律掩码，绝不回传明文）。"""
+    import copy
+    out = copy.deepcopy(cfg)
+    for sec in out.get("server", {}).values():
+        if isinstance(sec, dict) and sec.get("api_key"):
+            sec["api_key"] = "****"
+    return out
+
+
+CFG = _load_config()
+print(f"[config] 已加载: {CONFIG_PATH.name if CONFIG_PATH.exists() else '内置默认'}")
+
+# 模型变量（供 Provider 实例化——热生效时更新）
+ASR_MODEL = CFG["server"]["asr"]["model"]
+FAST_MODEL = CFG["server"]["fast_llm"]["model"]
+FAST_PROVIDER = CFG["server"]["fast_llm"].get("provider", "ollama")   # ollama 本地 | dashscope 云端
+FAST_BASE = CFG["server"]["fast_llm"].get("base_url", "http://127.0.0.1:11434")
+SLOW_MODEL = CFG["server"]["slow_llm"]["model"]
+OMNI_MODEL = CFG["server"]["omni"]["model"]
+TTS_BATCH_MODEL = CFG["server"]["tts"]["batch_model"]
+TTS_STREAM_MODEL = CFG["server"]["tts"]["stream_model"]
+TTS_VOICE = CFG["server"]["tts"].get("voice", "Cherry")
+TTS_SAMPLE_RATE = CFG["server"]["tts"].get("sample_rate", 24000)
 
 _NOISE_HINTS = ("嗯", "啊", "哦", "呃", "emm", "hmm", "哼", "哈", "嘿")
 
@@ -96,14 +217,15 @@ class RuleVadJudge(VadJudge):
 
 
 class OmniVadJudge(VadJudge):
-    """Omni 实现：qwen3.5-omni-flash + prompt 引导判断语义（验证可插拔架构可行性）。
+    """Omni 实现：qwen3.5-omni-flash + prompt 引导判断语义（可插拔架构可行性验证）。
+    模型与 prompt 从 config.json（server.omni）读取——界面可配置。
     失败/超时自动回退 RuleVadJudge（接缝容错）。"""
 
-    MODEL = "qwen3.5-omni-flash"
-
-    def __init__(self, host: str, api_key: str):
+    def __init__(self, host: str, api_key: str, model: str | None = None, prompt: str | None = None):
         self.host = host
         self.api_key = api_key
+        self.model = model or OMNI_MODEL
+        self.prompt = prompt or CFG["server"]["omni"]["prompt"]
         self._fallback = RuleVadJudge()
 
     async def judge(self, text: str, history: list[dict], last_replies=(),
@@ -118,31 +240,8 @@ class OmniVadJudge(VadJudge):
             playing = "是" if is_replying else "否"
         except Exception:
             playing = "否"
-        system = (
-            "你是全双工语音对话系统的语义 VAD（语音活动检测）。给定用户语音转写文本、"
-            "AI 最近播放的回复、对话历史，判断用户当前状态。只输出 JSON，不要其他内容："
-            '{"state": "complete|incomplete|backchannel|barge_in|noise|tts_echo|reject", "reason": "简短理由"}'
-            "\n\n状态定义："
-            "- complete：用户说完完整指令/问题，等待系统回复"
-            "- incomplete：用户在对 AI 说话但被打断（有指令/问题意图、话没说完），"
-            "如'打开客厅的'（未完的指令）"
-            "- backchannel：仅应声词（嗯/对/好/明白）无新内容，系统不应回应"
-            "- barge_in：用户打断 AI 播放且内容完整（有新指令），系统应立即接管"
-            "- noise：无意义内容/转录噪声/幻觉——典型如：环境音/背景人声/与人闲聊的转写"
-            "（'要么就是整张图的分布''这个地方实际上就是之前我们'这类无指令意图、"
-            "像与人交谈的句子）、平台话术（'谢谢观看''请订阅'）、笑声（'哈哈'）、碎片句"
-            "- tts_echo：内容与 AI 刚播放的回复几乎逐字一致（麦克风拾取 AI 声音的回声）"
-            "- reject：听不清/不理解（用户请求重复，如'什么？''再说一遍'）"
-            "\n\n关键规则："
-            f"- 当前 AI 是否正在播放回复：{playing}（这是权威状态，即使播放历史为空也以此为准）"
-            "- 若'正在播放'（是）且用户内容为完整新指令 → 判定 barge_in（不是 complete），无论播放历史是否为空"
-            "- 若'不在播放'（否）且内容完整 → 判定 complete"
-            "- 判断是否'对 AI 的指令/问题'：有明确动作/请求意图（打开/关闭/帮我/讲/问/调…）"
-            "→ 完整=complete，未完=incomplete"
-            "- 无指令意图、像闲聊/陈述/与人交谈（'这个地方''实际上''之前我们'）→ 判定 noise"
-            "（不是 incomplete——incomplete 是'对 AI 说话被打断'）"
-            "- 拿不准时 → 判定 noise（宁可丢弃，不可误触发回复）"
-        )
+        # prompt 支持 {playing} 占位符（config 可配——无占位符则原样使用）
+        system = self.prompt.format(playing=playing) if "{playing}" in self.prompt else self.prompt
         user = (
             f"AI 最近播放的回复：{json.dumps(list(last_replies or []), ensure_ascii=False)}\n"
             f"对话历史（最近3轮）：{json.dumps([m for m in history[-6:] if m.get('role') == 'user'][-3:] or history[-3:], ensure_ascii=False)}\n"
@@ -150,7 +249,7 @@ class OmniVadJudge(VadJudge):
             "请判断状态："
         )
         body = {
-            "model": self.MODEL,
+            "model": self.model,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
             "temperature": 0.0,
@@ -208,7 +307,7 @@ async def _post_json(url: str, headers: dict, json: dict, timeout: float = 8.0) 
 # 实例化（可插拔：SEMANTIC_VAD=omni 切换；运行中可由前端 /api/vad_switch 动态切换）
 if VAD_JUDGE == "omni":
     vad_judge: VadJudge = OmniVadJudge(host=HOST, api_key=KEY)
-    print(f"✅ 语义 VAD = Omni（{OmniVadJudge.MODEL}）——架构验证模式")
+    print(f"✅ 语义 VAD = Omni（{OMNI_MODEL}）——架构验证模式")
 else:
     vad_judge = RuleVadJudge()
     print("✅ 语义 VAD = Rule（默认）——SEMANTIC_VAD=omni 切换 Omni 验证")
@@ -295,10 +394,59 @@ FRONTEND_LOGS: deque[str] = deque(maxlen=3000)   # 前端自动上报日志（�
 
 asr = Qwen3ASRProvider(host=HOST, api_key=KEY, model=ASR_MODEL)
 asr_stream = FunASRStreamProvider(host=HOST, api_key=KEY)   # 真流式（fun-asr，partial 实时）
-fast_llm = OllamaFastProvider(base_url=FAST_BASE, model=FAST_MODEL)
+
+
+def _make_fast_llm():
+    """快 LLM 按 provider 实例化：ollama 本地 / dashscope 云端（OpenAI 兼容）——界面可配置。"""
+    if FAST_PROVIDER == "dashscope":
+        return OpenAICompatLLMProvider(
+            base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=FAST_MODEL)
+    # 默认 ollama 本地（base_url 可配自定义端点）
+    return OllamaFastProvider(base_url=FAST_BASE, model=FAST_MODEL)
+
+
+fast_llm = _make_fast_llm()
 slow_llm = OpenAICompatLLMProvider(
     base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=SLOW_MODEL)
 tts = Qwen3TTSProvider(host=HOST, api_key=KEY)
+
+
+def _apply_config(cfg: dict) -> dict:
+    """应用新配置（热生效，不重启）：更新模型变量 + prompt 注入 + 重建 Provider。"""
+    global CFG, ASR_MODEL, FAST_MODEL, FAST_BASE, SLOW_MODEL, OMNI_MODEL
+    global TTS_BATCH_MODEL, TTS_STREAM_MODEL, TTS_VOICE, TTS_SAMPLE_RATE
+    global asr, fast_llm, slow_llm, tts, tts_stream, vad_judge
+    global FAST_PROVIDER
+    CFG = cfg
+    s = cfg["server"]
+    ASR_MODEL = s["asr"]["model"]
+    FAST_MODEL = s["fast_llm"]["model"]
+    FAST_PROVIDER = s["fast_llm"].get("provider", "ollama")
+    FAST_BASE = s["fast_llm"].get("base_url", "http://127.0.0.1:11434")
+    SLOW_MODEL = s["slow_llm"]["model"]
+    OMNI_MODEL = s["omni"]["model"]
+    TTS_BATCH_MODEL = s["tts"]["batch_model"]
+    TTS_STREAM_MODEL = s["tts"]["stream_model"]
+    TTS_VOICE = s["tts"].get("voice", "Cherry")
+    TTS_SAMPLE_RATE = s["tts"].get("sample_rate", 24000)
+    # prompt 注入（fast 系统 prompt / slow 融合策略 / Omni VAD）
+    FusionPolicy.FAST_SYSTEM = s["fast_llm"]["prompt"]
+    from duplex_voice.adapter.fusion import STRATEGIES as _STRATS
+    _STRATS["fastslow"].custom_slow_prompt = s["slow_llm"]["prompt_fastslow"]
+    _STRATS["direct"].custom_slow_prompt = s["slow_llm"]["prompt_direct"]
+    # 重建 Provider（模型/端点变化即时生效）
+    asr = Qwen3ASRProvider(host=HOST, api_key=KEY, model=ASR_MODEL)
+    fast_llm = _make_fast_llm()
+    slow_llm = OpenAICompatLLMProvider(
+        base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=SLOW_MODEL)
+    tts = Qwen3TTSProvider(host=HOST, api_key=KEY)
+    tts_stream = Qwen3TTSStream(HOST, KEY)
+    if VAD_JUDGE == "omni":
+        vad_judge = OmniVadJudge(host=HOST, api_key=KEY, model=OMNI_MODEL, prompt=s["omni"]["prompt"])
+    print(f"[config] 热生效: asr={ASR_MODEL} fast={FAST_MODEL} slow={SLOW_MODEL} "
+          f"omni={OMNI_MODEL} tts_voice={TTS_VOICE}")
+    return {"ok": True,
+            "models": {"asr": ASR_MODEL, "fast": FAST_MODEL, "slow": SLOW_MODEL, "omni": OMNI_MODEL}}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -313,6 +461,33 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="语音助手 Web 页面", lifespan=lifespan)
+
+
+# ---- 配置 API（界面详细配置面板读写；模型/prompt 热生效，不重启）----
+@app.get("/api/config")
+async def get_config():
+    return {"ok": True, "config": _mask_cfg(CFG)}
+
+
+@app.post("/api/config")
+async def post_config(body: dict):
+    cfg = body.get("config")
+    if not isinstance(cfg, dict):
+        return JSONResponse({"ok": False, "error": "config 缺失"}, status_code=400)
+    merged = _deep_merge(DEFAULT_CONFIG, cfg)   # 部分覆盖安全（缺键保留默认）
+    if not _save_config(merged):
+        return JSONResponse({"ok": False, "error": "保存失败"}, status_code=500)
+    applied = _apply_config(merged)
+    return {"ok": True, **applied, "frontend": merged.get("frontend", {})}
+
+
+@app.post("/api/config/reset")
+async def reset_config():
+    """恢复内置默认配置（写文件 + 热生效）。"""
+    merged = _deep_merge(DEFAULT_CONFIG, {})
+    _save_config(merged)
+    applied = _apply_config(merged)
+    return {"ok": True, **applied, "frontend": merged.get("frontend", {})}
 
 # 本地 TTS 音频缓存静态服务（前端播放不走公网——下载时延不计入响应）
 app.mount("/tts_cache", StaticFiles(directory=TTS_CACHE), name="tts_cache")

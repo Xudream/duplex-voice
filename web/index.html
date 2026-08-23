@@ -788,9 +788,10 @@ const CFG_FIELDS = {
     // 按模型分组（第 4 元素 = 组标题；渲染时输出 .cfg-sec 分隔）
     ['server.asr.model', '模型', 'text', '🎙️ ASR（语音识别）'],
     ['server.asr.ws_endpoint', 'WS 端点', 'text', '🎙️ ASR（语音识别）'],
-    ['server.fast_llm.model', '模型', 'text', '⚡ 快 LLM（本地 Ollama 承接语）'],
-    ['server.fast_llm.base_url', 'Base URL', 'text', '⚡ 快 LLM（本地 Ollama 承接语）'],
-    ['server.fast_llm.max_chars', '承接语字数上限', 'number', '⚡ 快 LLM（本地 Ollama 承接语）'],
+    ['server.fast_llm.provider', 'Provider', 'select', '⚡ 快 LLM（承接语）', ['ollama', 'dashscope']],
+    ['server.fast_llm.model', '模型', 'text', '⚡ 快 LLM（承接语）'],
+    ['server.fast_llm.base_url', 'Base URL（ollama 本地地址）', 'text', '⚡ 快 LLM（承接语）'],
+    ['server.fast_llm.max_chars', '承接语字数上限', 'number', '⚡ 快 LLM（承接语）'],
     ['server.slow_llm.model', '模型', 'text', '🐢 慢 LLM（云端深度回复）'],
     ['server.slow_llm.max_tokens', 'max_tokens', 'number', '🐢 慢 LLM（云端深度回复）'],
     ['server.omni.model', '模型', 'text', '🧠 Omni 语义 VAD'],
@@ -882,7 +883,7 @@ function renderCfgTab(tab) {
   const fields = CFG_FIELDS[tab] || [];
   let html = '<div class="cfg-grid">';
   let lastGroup = null;
-  fields.forEach(([path, label, type, group]) => {
+  fields.forEach(([path, label, type, group, opts]) => {
     // 分组标题（按模型聚合——同模型字段归一组，不混排）
     if (group && group !== lastGroup) {
       lastGroup = group;
@@ -894,9 +895,13 @@ function renderCfgTab(tab) {
     if (type === 'textarea') {
       html += `<textarea data-path="${path}" spellcheck="false">${(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')}</textarea>`;
     } else if (type === 'bool') {
-      html += `<select data-path="${path}">
+      html += `<select data-path="${path}" data-type="bool">
         <option value="true" ${v ? 'selected' : ''}>是</option>
         <option value="false" ${v ? '' : 'selected'}>否</option></select>`;
+    } else if (type === 'select') {
+      // 普通下拉（如 Provider）——data-type 缺省 → collect 取原值
+      html += `<select data-path="${path}">${(opts || []).map(o =>
+        `<option value="${o}" ${v === o ? 'selected' : ''}>${o}</option>`).join('')}</select>`;
     } else {
       html += `<input type="${type === 'number' ? 'number' : 'text'}" step="${type === 'number' ? 'any' : ''}" data-path="${path}" value="${v ?? ''}">`;
     }
@@ -911,7 +916,7 @@ function collectCfgFromForm() {
     const p = el.dataset.path;
     let v;
     if (el.tagName === 'TEXTAREA') v = el.value;
-    else if (el.tagName === 'SELECT') v = el.value === 'true';
+    else if (el.tagName === 'SELECT') v = el.dataset.type === 'bool' ? el.value === 'true' : el.value;
     else if (el.type === 'number') v = el.value === '' ? '' : Number(el.value);
     else v = el.value;
     setPath(cfgState, p, v);
