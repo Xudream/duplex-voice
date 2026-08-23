@@ -353,7 +353,7 @@ async function contLoop() {
       if (sceneBehavior().playback === 'surgeCut') {
         // 🔊 扬声器场景：突增即切段——门槛降（1.6 倍/0.015，远场人声+TTS 叠加；
         //   耳机场景无回声用不到）。突增点即段起点（contSegStart 前移 250ms pre-roll），
-        //   突增回落（用户停说）立即切段+停播——不等静音判停（TTS 声还在判停永不满足）。
+        //   突增回落（用户停说）切段发送——不停播，等语义确认（vad_state 决定打断/继续）。
         const surged = playBaseRms > 0.006 && rms > playBaseRms * 1.6 && rms > 0.015;
         if (surged) {
           if (!surgeSince) {
@@ -362,13 +362,14 @@ async function contLoop() {
             vlog('INFO', 'VAD', '扬声器场景：突增开始→段起点前移', { base: +playBaseRms.toFixed(4), rms: +rms.toFixed(4), at: contSegStart });
           }
         } else if (surgeSince) {
-          // 突增回落（用户说完）→ 立即切段 + 停播（TTS 声消失让语义 VAD 决定打断/回复）
+          // 突增回落（用户停说）→ 切段发送——**不停播**！停播交给语义确认
+          // （vad_state：complete/barge_in → 停播真打断；backchannel/noise/tts_echo
+          //  → TTS 继续——"喂"这类招呼语不误打断播放）。段含 TTS 回声 → 跳占比过滤
+          // （server is_tts_echo 语义过滤兜底）。
           const dur = Date.now() - surgeSince;
           surgeSince = 0;
-          userInterrupting = true;
-          stopAllPlayback();
-          vlog('INFO', 'VAD', '扬声器场景：突增回落→切段+停播', { dur, at: contSegStart });
-          flushContSegment(true);   // skipRatioCheck=true（段含 TTS 回声混入，占比过滤会误杀——server is_tts_echo 兜底）
+          vlog('INFO', 'VAD', '扬声器场景：突增回落→切段（待语义确认，不停播）', { dur, at: contSegStart });
+          flushContSegment(true);
         }
       } else {
         // 🎧 耳机场景（现状）：TTS 声被基线吸收不误触发；人声叠加突增持续 ≥400ms 才停播
