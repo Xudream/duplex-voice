@@ -125,6 +125,7 @@
     <button class="cont-btn" id="vadBtn" disabled title="切换语义 VAD 实现（rule 规则 / omni 模型）">🧠 VAD: …</button>
     <button class="cont-btn" id="fusionBtn" disabled title="切换回复融合（快慢融合 / 慢回复直达）">🎙 融合: …</button>
     <button class="cont-btn" id="ttsBtn" disabled title="切换 TTS（stream 流式 / batch 整段）">🎵 TTS: …</button>
+    <button class="cont-btn" id="sceneBtn" disabled title="切换收音场景（🎧 耳机近讲 / 🔊 扬声器外放——外放时播放期收音策略不同）">🎧 场景: …</button>
     <div class="hint" id="hint">按住说话 · 松开识别</div>
   </div>
   <div class="vad-info" id="vadInfo"></div>
@@ -135,9 +136,21 @@
 const $ = id => document.getElementById(id);
 const btn = $('wakeBtn'), chat = $('chat'), stage = $('stage'), hint = $('hint');
 const micIcon = $('micIcon'), ripple = $('ripple'), waveCanvas = $('wave');
-const contBtn = $('contBtn'), vadBtn = $('vadBtn'), fusionBtn = $('fusionBtn'), ttsBtn = $('ttsBtn');
+const contBtn = $('contBtn'), vadBtn = $('vadBtn'), fusionBtn = $('fusionBtn'), ttsBtn = $('ttsBtn'), sceneBtn = $('sceneBtn');
 let vadMode = null;   // 当前语义 VAD 模式（rule | omni）
 let ttsMode = null;   // 当前 TTS 模式（stream | batch）
+let sceneMode = localStorage.getItem('voice_scene') || 'headset';   // 收音场景（耳机近讲/扬声器外放）——localStorage 持久化
+
+// 收音场景行为注册表（可插拔——插入新场景只注册不改播放期代码）
+const SCENE_BEHAVIOR = {
+  // 🎧 耳机近讲：无回声问题，现状（判停 800ms + 播放期 surge 400ms 停播）——已验证效果好，不动
+  headset: { playback: 'current' },
+  // 🔊 扬声器外放：TTS 声进 mic（AEC 残余）撑高 Silero → 静音判停永不触发。
+  //   突增即切段：降门槛（1.6 倍）+ 突增点即段起点（不丢开头）+ 突增回落立即切段停播
+  //   （不等 400ms→停播→静音判停 800ms 长链——TTS 声不消失判停永不满足）
+  speaker: { playback: 'surgeCut' },
+};
+const sceneBehavior = () => SCENE_BEHAVIOR[sceneMode] || SCENE_BEHAVIOR.headset;
 
 // ---- 语义 VAD 行为注册表（可插拔：插入新 VAD 只需注册，不改行为代码）----
 // bargeIn: 'immediate' = 播放中检测语音立即打断（声学 VAD 原行为）
@@ -337,16 +350,39 @@ async function contLoop() {
     // （TTS 声自身被基线吸收不会误触发——与上次"Silero 即停播"方案的区别）
     if (isReplying && !userInterrupting) {
       playBaseRms = playBaseRms * 0.92 + rms * 0.08;
-      const surged = playBaseRms > 0.008 && rms > playBaseRms * 2.2 && rms > 0.02;
-      if (surged) {
-        if (!surgeSince) surgeSince = Date.now();   // 突增开始
-        if (Date.now() - surgeSince >= 400) {       // 持续 ≥400ms → 真打断（短促附和不触发）
-          userInterrupting = true; surgeSince = 0;
+      if (sceneBehavior().playback === 'surgeCut') {
+        // 🔊 扬声器场景：突增即切段——门槛降（1.6 倍/0.015，远场人声+TTS 叠加；
+        //   耳机场景无回声用不到）。突增点即段起点（contSegStart 前移 250ms pre-roll），
+        //   突增回落（用户停说）立即切段+停播——不等静音判停（TTS 声还在判停永不满足）。
+        const surged = playBaseRms > 0.006 && rms > playBaseRms * 1.6 && rms > 0.015;
+        if (surged) {
+          if (!surgeSince) {
+            surgeSince = Date.now();
+            contSegStart = Math.max(0, contPcm.length - 4000);   // 段起点 = 突增点 - 250ms
+            vlog('INFO', 'VAD', '扬声器场景：突增开始→段起点前移', { base: +playBaseRms.toFixed(4), rms: +rms.toFixed(4), at: contSegStart });
+          }
+        } else if (surgeSince) {
+          // 突增回落（用户说完）→ 立即切段 + 停播（TTS 声消失让语义 VAD 决定打断/回复）
+          const dur = Date.now() - surgeSince;
+          surgeSince = 0;
+          userInterrupting = true;
           stopAllPlayback();
-          vlog('INFO', 'VAD', '播放期能量突增≥400ms→停播', { base: +playBaseRms.toFixed(4), rms: +rms.toFixed(4) });
+          vlog('INFO', 'VAD', '扬声器场景：突增回落→切段+停播', { dur, at: contSegStart });
+          flushContSegment(true);   // skipRatioCheck=true（段含 TTS 回声混入，占比过滤会误杀——server is_tts_echo 兜底）
         }
       } else {
-        surgeSince = 0;   // 突增结束（"嗯/对"应声）→ 重置，不停播
+        // 🎧 耳机场景（现状）：TTS 声被基线吸收不误触发；人声叠加突增持续 ≥400ms 才停播
+        const surged = playBaseRms > 0.008 && rms > playBaseRms * 2.2 && rms > 0.02;
+        if (surged) {
+          if (!surgeSince) surgeSince = Date.now();   // 突增开始
+          if (Date.now() - surgeSince >= 400) {       // 持续 ≥400ms → 真打断（短促附和不触发）
+            userInterrupting = true; surgeSince = 0;
+            stopAllPlayback();
+            vlog('INFO', 'VAD', '播放期能量突增≥400ms→停播', { base: +playBaseRms.toFixed(4), rms: +rms.toFixed(4) });
+          }
+        } else {
+          surgeSince = 0;   // 突增结束（"嗯/对"应声）→ 重置，不停播
+        }
       }
     }
     const isSpeech = contVoice ? (vote >= CONT_VOTE_EXIT) : (vote >= CONT_VOTE_MIN);
@@ -437,7 +473,7 @@ async function contLoop() {
     ctx.fillRect(i * w + 2, (waveCanvas.height - h) / 2, w - 4, h);
   }
 }
-async function flushContSegment() {
+async function flushContSegment(skipRatioCheck) {
   // 静音切段 → 从语音触发点（pre-roll 250ms）取 16k PCM 组装 wav 发送
   // 关键：段 = [语音触发, 静音判停]，排除回复播放期累积的残留音频（否则 ASR 识别错）
   const segLen = contPcm.length - contSegStart;
@@ -446,7 +482,9 @@ async function flushContSegment() {
   // 段 1-1.3s）占比 20-35% 波动（触发判定消耗前 250ms + 判停尾静音 800ms 稀释），
   // 30 帧门槛仍误杀（实测 22-29% 被丢、36% 过线——临界波动决定成败）；
   // 背景人声段通常 >1.6s（持续音）→ 仍过滤；短段由 server ASR 噪声过滤兜底
-  if (contSegTotal >= 50 && contSegSpeech / contSegTotal < SEG_SPEECH_MIN_RATIO) {
+  // skipRatioCheck=true：扬声器场景突增切段（段含 TTS 回声混入，占比天然偏低）——
+  // server is_tts_echo 语义过滤兜底
+  if (!skipRatioCheck && contSegTotal >= 50 && contSegSpeech / contSegTotal < SEG_SPEECH_MIN_RATIO) {
     vlog('WARN', 'FLUSH', '丢弃：语音占比低（疑似背景人声）', { speech: contSegSpeech, total: contSegTotal });
     contPcm = []; contSegSpeech = 0; contSegTotal = 0;
     return;
@@ -535,6 +573,10 @@ fetch('/api/health').then(r => r.json()).then(() => {
     ttsBtn.textContent = '🎵 TTS: ' + (d.mode === 'stream' ? '流式' : '整段');
     ttsBtn.disabled = false;
   }).catch(() => { ttsBtn.textContent = '🎵 TTS: -'; });
+  // 收音场景开关：本地持久化（耳机近讲 | 扬声器外放）——播放期收音策略不同
+  sceneBtn.textContent = '🎧 场景: ' + (sceneMode === 'speaker' ? '扬声器' : '耳机');
+  sceneBtn.disabled = false;
+  vlog('INFO', 'SCENE', '收音场景', { scene: sceneMode });
 }).catch(() => { $('connText').textContent = '后端未启动'; });
 
 // 语义 VAD 动态切换（rule 规则 ↔ omni 模型，不重启）
@@ -605,6 +647,16 @@ ttsBtn.addEventListener('click', async () => {
   } finally {
     ttsBtn.disabled = false;
   }
+});
+
+// ---- 收音场景切换（耳机近讲 ↔ 扬声器外放，localStorage 持久化）----
+sceneBtn.addEventListener('click', () => {
+  sceneMode = sceneMode === 'speaker' ? 'headset' : 'speaker';
+  localStorage.setItem('voice_scene', sceneMode);
+  sceneBtn.textContent = '🎧 场景: ' + (sceneMode === 'speaker' ? '扬声器' : '耳机');
+  surgeSince = 0;   // 场景切换立即重置突增状态
+  setStage('🎧 场景切换: ' + (sceneMode === 'speaker' ? '扬声器外放（播放期突增即切段）' : '耳机近讲（原策略）'));
+  vlog('INFO', 'SCENE_SWITCH', '切换', { scene: sceneMode });
 });
 
 // ---- 阶段状态 ----
