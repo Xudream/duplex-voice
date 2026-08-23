@@ -151,18 +151,21 @@ const SCENE_BEHAVIOR = {
     rmsFloor: 0.02,        // 帧能量下限
     surgeMs: 400,          // 突增持续 ≥400ms 才停播（短促附和不触发）
     cutOnSurge: false,     // 不主动切段（停播后靠静音判停 800ms 切段）
+    preRollMs: 4000,       // 段起点提前量（250ms——语音触发检测延迟补偿）
     ttsVolume: 1.0,        // 播放音量（耳机不漏音，可满音量）
   },
-  // 🔊 扬声器外放：TTS 声进 mic（AEC 残余）→ 静音判停永不触发 → 必须主动停播+切段。
-  //   低门槛（1.6 倍）+ 短时长（200ms）+ 切段停播（TTS 声消失→段干净→ASR 识别准）
-  //   + 播放音量降 0.6（进 mic 的 TTS 声减小，段更干净）
+  // 🔊 扬声器外放：TTS 声进 mic（AEC 残余，TTS 音色浏览器 AEC 消除不彻底）
+  //   → 静音判停永不触发 → 主动停播+切段。低门槛（1.6 倍）+ 短时长（120ms 尽快停播，
+  //   缩短 TTS 污染窗口）+ pre-roll 100ms（少取 TTS 尾音——开头丢 150ms 比整句
+  //   识别错可接受）+ 播放音量 0.5（进 mic 的 TTS 声进一步减小）
   speaker: {
     surgeThreshold: 1.6,
     surgeFloor: 0.006,
     rmsFloor: 0.015,
-    surgeMs: 200,          // 持续 ≥200ms 即真语音（短促"喂"<200ms 丢弃不打断）
-    cutOnSurge: true,      // 主动切段（段起点=突增点 - pre-roll）
-    ttsVolume: 0.6,
+    surgeMs: 120,          // 持续 ≥120ms 即真语音——尽快停播（TTS 声消失段才干净）
+    cutOnSurge: true,      // 主动切段
+    preRollMs: 1600,       // 段起点提前量 100ms（比耳机短——少取 TTS 尾音）
+    ttsVolume: 0.5,
   },
 };
 const sceneBehavior = () => SCENE_BEHAVIOR[sceneMode] || SCENE_BEHAVIOR.headset;
@@ -371,7 +374,7 @@ async function contLoop() {
       if (surged) {
         if (!surgeSince) {
           surgeSince = Date.now();
-          if (sc.cutOnSurge) contSegStart = Math.max(0, contPcm.length - 4000);   // 段起点=突增点 - 250ms
+          if (sc.cutOnSurge) contSegStart = Math.max(0, contPcm.length - sc.preRollMs);   // 段起点=突增点 - 场景 pre-roll
         }
         if (Date.now() - surgeSince >= sc.surgeMs) {
           // 持续 ≥surgeMs → 真语音 → 停播（TTS 声消失，段干净→ASR 识别准）
