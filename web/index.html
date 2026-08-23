@@ -785,20 +785,21 @@ let cfgJsonDirty = false;         // 预设 tab 手动改过 JSON
 // 字段定义（path → [label, type]）——按 tab 分组
 const CFG_FIELDS = {
   models: [
-    ['server.asr.model', 'ASR 模型', 'text'],
-    ['server.asr.ws_endpoint', 'ASR WS 端点', 'text'],
-    ['server.fast_llm.model', '快 LLM 模型（Ollama）', 'text'],
-    ['server.fast_llm.base_url', '快 LLM Base URL', 'text'],
-    ['server.fast_llm.max_chars', '快 LLM 承接语字数上限', 'number'],
-    ['server.slow_llm.model', '慢 LLM 模型', 'text'],
-    ['server.slow_llm.max_tokens', '慢 LLM max_tokens', 'number'],
-    ['server.omni.model', 'Omni 语义 VAD 模型', 'text'],
-    ['server.omni.temperature', 'Omni temperature', 'number'],
-    ['server.omni.max_tokens', 'Omni max_tokens', 'number'],
-    ['server.tts.batch_model', 'TTS 整段模型', 'text'],
-    ['server.tts.stream_model', 'TTS 流式模型', 'text'],
-    ['server.tts.voice', 'TTS 音色', 'text'],
-    ['server.tts.sample_rate', 'TTS 采样率', 'number'],
+    // 按模型分组（第 4 元素 = 组标题；渲染时输出 .cfg-sec 分隔）
+    ['server.asr.model', '模型', 'text', '🎙️ ASR（语音识别）'],
+    ['server.asr.ws_endpoint', 'WS 端点', 'text', '🎙️ ASR（语音识别）'],
+    ['server.fast_llm.model', '模型', 'text', '⚡ 快 LLM（本地 Ollama 承接语）'],
+    ['server.fast_llm.base_url', 'Base URL', 'text', '⚡ 快 LLM（本地 Ollama 承接语）'],
+    ['server.fast_llm.max_chars', '承接语字数上限', 'number', '⚡ 快 LLM（本地 Ollama 承接语）'],
+    ['server.slow_llm.model', '模型', 'text', '🐢 慢 LLM（云端深度回复）'],
+    ['server.slow_llm.max_tokens', 'max_tokens', 'number', '🐢 慢 LLM（云端深度回复）'],
+    ['server.omni.model', '模型', 'text', '🧠 Omni 语义 VAD'],
+    ['server.omni.temperature', 'temperature', 'number', '🧠 Omni 语义 VAD'],
+    ['server.omni.max_tokens', 'max_tokens', 'number', '🧠 Omni 语义 VAD'],
+    ['server.tts.batch_model', '整段模型', 'text', '🔊 TTS（语音合成）'],
+    ['server.tts.stream_model', '流式模型', 'text', '🔊 TTS（语音合成）'],
+    ['server.tts.voice', '音色', 'text', '🔊 TTS（语音合成）'],
+    ['server.tts.sample_rate', '采样率', 'number', '🔊 TTS（语音合成）'],
   ],
   prompts: [
     ['server.fast_llm.prompt', '快 LLM 承接语 prompt（6-10 字）', 'textarea'],
@@ -880,7 +881,13 @@ function renderCfgTab(tab) {
   }
   const fields = CFG_FIELDS[tab] || [];
   let html = '<div class="cfg-grid">';
-  fields.forEach(([path, label, type]) => {
+  let lastGroup = null;
+  fields.forEach(([path, label, type, group]) => {
+    // 分组标题（按模型聚合——同模型字段归一组，不混排）
+    if (group && group !== lastGroup) {
+      lastGroup = group;
+      html += `<div class="cfg-sec">${group}</div>`;
+    }
     const v = getPath(cfgState, path);
     html += `<div class="cfg-field${type === 'textarea' ? ' full' : ''}">
       <label>${label}</label>`;
