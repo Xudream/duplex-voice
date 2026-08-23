@@ -155,17 +155,18 @@ const SCENE_BEHAVIOR = {
     ttsVolume: 1.0,        // 播放音量（耳机不漏音，可满音量）
   },
   // 🔊 扬声器外放：TTS 声进 mic（AEC 残余，TTS 音色浏览器 AEC 消除不彻底）
-  //   → 静音判停永不触发 → 主动停播+切段。低门槛（1.6 倍）+ 短时长（120ms 尽快停播，
-  //   缩短 TTS 污染窗口）+ pre-roll 100ms（少取 TTS 尾音——开头丢 150ms 比整句
-  //   识别错可接受）+ 播放音量 0.5（进 mic 的 TTS 声进一步减小）
+  //   → 静音判停永不触发 → 主动停播+切段。参数经三轮实测定稿：
+  //   120ms/pre-roll100ms/音量0.5 全更差（音量降→基线低→1.6 倍更易误触发；
+  //   120ms 被 TTS 声起伏误停播；pre-roll 100ms 丢用户开头）——回退
+  //   200ms/250ms/0.6（2026-08-22 用户实测"不如刚才"）
   speaker: {
     surgeThreshold: 1.6,
     surgeFloor: 0.006,
     rmsFloor: 0.015,
-    surgeMs: 120,          // 持续 ≥120ms 即真语音——尽快停播（TTS 声消失段才干净）
+    surgeMs: 200,          // 持续 ≥200ms 即真语音
     cutOnSurge: true,      // 主动切段
-    preRollMs: 1600,       // 段起点提前量 100ms（比耳机短——少取 TTS 尾音）
-    ttsVolume: 0.5,
+    preRollMs: 4000,       // 段起点提前量 250ms（保用户开头）
+    ttsVolume: 0.6,
   },
 };
 const sceneBehavior = () => SCENE_BEHAVIOR[sceneMode] || SCENE_BEHAVIOR.headset;
