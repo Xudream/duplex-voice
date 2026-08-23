@@ -48,7 +48,7 @@ def _load_key() -> str:
     key = os.environ.get("DASHSCOPE_API_KEY", "")
     if not key:
         try:
-            cfg = json.loads((WEB_DIR.parent / "config.yaml").read_text())
+            cfg = json.loads((WEB_DIR.parent / "config.yaml").read_text(encoding="utf-8"))
             key = cfg.get("model", {}).get("dashscope_api_key", "")
         except Exception:
             pass
@@ -492,6 +492,7 @@ async def reset_config():
     return {"ok": True, **applied, "frontend": merged.get("frontend", {})}
 
 # 本地 TTS 音频缓存静态服务（前端播放不走公网——下载时延不计入响应）
+TTS_CACHE.mkdir(parents=True, exist_ok=True)   # 运行时目录自动创建（git clone 不带空目录——Windows 必踩）
 app.mount("/tts_cache", StaticFiles(directory=TTS_CACHE), name="tts_cache")
 
 
