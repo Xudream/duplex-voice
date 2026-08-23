@@ -128,7 +128,7 @@
 <body>
 
 <header>
-  <div class="brand"><span class="logo">🎙</span>语音助手 <span style="font-weight:400;font-size:12px;color:var(--text-dim)">快慢融合 · qwen3.5:4b-mlx + qwen3.6-27b</span></div>
+  <div class="brand"><span class="logo">🎙</span>语音助手 <span id="modelInfo" style="font-weight:400;font-size:12px;color:var(--text-dim)">快慢融合 · 加载中…</span></div>
   <div class="conn"><span class="dot" id="connDot"></span><span id="connText">连接中…</span></div>
 </header>
 
@@ -279,11 +279,21 @@ function loadFrontendConfig() {
   try {
     const cached = localStorage.getItem('voice_fe_config');
     if (cached) applyFrontendConfig(JSON.parse(cached));
-  } catch (e) { /* 缓存损坏忽略 */ }
+  } catch (e) {}
   fetch('/api/config').then(r => r.json()).then(d => {
-    if (d.ok && d.config && d.config.frontend) {
-      applyFrontendConfig(d.config.frontend);
-      try { localStorage.setItem('voice_fe_config', JSON.stringify(d.config.frontend)); } catch (e) {}
+    if (d.ok && d.config) {
+      if (d.config.frontend) {
+        applyFrontendConfig(d.config.frontend);
+        try { localStorage.setItem('voice_fe_config', JSON.stringify(d.config.frontend)); } catch (e) {}
+      }
+      // 顶部模型信息（快慢融合实际模型——config 热生效后刷新页面即更新）
+      const mi = document.getElementById('modelInfo');
+      if (mi) {
+        const s = d.config.server || {};
+        const f = s.fast_llm || {}, sl = s.slow_llm || {};
+        const fLbl = (f.provider === 'dashscope' ? '云端 ' : '本地 ') + (f.model || '?');
+        mi.textContent = `快慢融合 · ${fLbl} + ${sl.model || '?'}`;
+      }
     }
   }).catch(() => {});
 }
@@ -1296,12 +1306,13 @@ async function sendAudio(b64) {
         userMsg.textContent = d.text || '（未识别到语音）';
         break;
       case 'fast':
-        // 快路径 LLM 时延（承接语生成耗时，送本地 Ollama → 承接语完成）
+        // 快路径 LLM 时延（承接语生成耗时——本地 Ollama 或云端快模型，按配置）
         metrics.llm_fast = d.latency_ms;
         fastStreamActive = true;   // 本轮有承接语 → 慢句必须等其播完（防重叠）
         if (!aiMsg) aiMsg = addMsg('ai', '');
         metrics.fast = d.latency_ms;
-        aiHtml += `<span class="tag"><span class="fast-tag">⚡ 承接语</span> · 本地 qwen3.5:4b-mlx</span><div class="fast-text">${escapeHtml(d.text)}</div>`;
+        const fastLbl = d.provider === 'dashscope' ? `云端 ${d.model}` : `本地 ${d.model}`;
+        aiHtml += `<span class="tag"><span class="fast-tag">⚡ 承接语</span> · ${escapeHtml(fastLbl)}</span><div class="fast-text">${escapeHtml(d.text)}</div>`;
         aiMsg.innerHTML = aiHtml;
         break;
       case 'slow_first':

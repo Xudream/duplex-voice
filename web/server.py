@@ -774,7 +774,8 @@ async def chat(req: ChatRequest):
                     LAST_REPLY[req.client_id] = [fast_text]   # 回声过滤：记录实际播放的承接语
                     fast_ms = int((time.time() - t0) * 1000)
                     log.info("FAST cid=%s text=%r ms=%d", req.client_id, fast_text, fast_ms)
-                    yield 'data: {"type":"fast","text":%s,"latency_ms":%d}\n\n' % (json.dumps(fast_text), fast_ms)
+                    yield 'data: {"type":"fast","text":%s,"latency_ms":%d,"provider":"%s","model":%s}\n\n' % (
+                        json.dumps(fast_text), fast_ms, FAST_PROVIDER, json.dumps(FAST_MODEL))
                     # 承接语立即流式 TTS → 事件入统一队列（i=-1 映射 idx=0），
                     # 与慢句并行流式下发（不阻塞——慢句块无需等承接语合成完）
                     if fast_text:
