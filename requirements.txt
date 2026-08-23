@@ -1,13 +1,12 @@
-# 级联全双工语音交互系统 v0.1（软件设计 v2.1）
-# Web 版（web/server.py）运行依赖：
+# duplex-voice web server dependencies (ASCII only - Windows pip uses locale encoding)
 fastapi>=0.111
 uvicorn>=0.30
 websockets>=12
 httpx>=0.27
 httpx-sse>=0.4
 numpy>=1.26
-# 桌面版（demo 模式）额外依赖：
+# desktop demo extra deps (optional)
 sounddevice>=0.5
-silero-vad>=5.0          # PyTorch 版（含 VADIterator）
-onnxruntime>=1.18        # Silero ONNX 后端
+silero-vad>=5.0          # PyTorch VAD (VADIterator)
+onnxruntime>=1.18        # Silero ONNX backend
 PyYAML>=6.0
