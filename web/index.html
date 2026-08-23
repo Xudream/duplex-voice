@@ -790,7 +790,8 @@ const CFG_FIELDS = {
     ['server.asr.ws_endpoint', 'WS 端点', 'text', '🎙️ ASR（语音识别）'],
     ['server.fast_llm.provider', 'Provider', 'select', '⚡ 快 LLM（承接语）', ['ollama', 'dashscope']],
     ['server.fast_llm.model', '模型', 'text', '⚡ 快 LLM（承接语）'],
-    ['server.fast_llm.base_url', 'Base URL（ollama 本地地址）', 'text', '⚡ 快 LLM（承接语）'],
+    ['server.fast_llm.base_url', () => (getPath(cfgState, 'server.fast_llm.provider') === 'dashscope'
+      ? 'Base URL（dashscope 云端，留空用默认端点）' : 'Base URL（ollama 本地地址）'), 'text', '⚡ 快 LLM（承接语）'],
     ['server.fast_llm.max_chars', '承接语字数上限', 'number', '⚡ 快 LLM（承接语）'],
     ['server.slow_llm.model', '模型', 'text', '🐢 慢 LLM（云端深度回复）'],
     ['server.slow_llm.max_tokens', 'max_tokens', 'number', '🐢 慢 LLM（云端深度回复）'],
@@ -890,8 +891,9 @@ function renderCfgTab(tab) {
       html += `<div class="cfg-sec">${group}</div>`;
     }
     const v = getPath(cfgState, path);
+    const lbl = typeof label === 'function' ? label() : label;   // label 可为函数（跟随 provider 等动态变化）
     html += `<div class="cfg-field${type === 'textarea' ? ' full' : ''}">
-      <label>${label}</label>`;
+      <label>${lbl}</label>`;
     if (type === 'textarea') {
       html += `<textarea data-path="${path}" spellcheck="false">${(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')}</textarea>`;
     } else if (type === 'bool') {
@@ -909,6 +911,9 @@ function renderCfgTab(tab) {
   });
   html += '</div>';
   cfgBody.innerHTML = html;
+  // provider 切换 → 立即重渲染（Base URL label 跟随 provider 变化）
+  const provSel = cfgBody.querySelector('[data-path="server.fast_llm.provider"]');
+  if (provSel) provSel.onchange = () => { collectCfgFromForm(); renderCfgTab('models'); };
 }
 
 function collectCfgFromForm() {
