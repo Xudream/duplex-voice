@@ -84,7 +84,7 @@
   .wake-btn:disabled { cursor: not-allowed; }
   /* 波形 canvas 已移出按钮（.wave-strip 独立横条）——按钮内不再有 canvas */
 
-  .hint { font-size: 12px; color: var(--text-dim); }
+  .hint { font-size: 12px; color: var(--text-dim); text-align: center; margin-top: 10px; }
   .cont-row { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 14px; }
   .cont-btn { background: rgba(255,255,255,.08); border: 1px solid var(--card-border); color: var(--text-dim);
     padding: 8px 18px; border-radius: 999px; font-size: 13px; cursor: pointer; transition: all .25s; }
@@ -146,6 +146,7 @@
       <div class="ripple" id="ripple"></div>
       <button class="wake-btn" id="wakeBtn" disabled><span id="micIcon">🎤</span></button>
     </div>
+    <div class="hint" id="hint">按住说话 · 松开识别</div>
   </div>
   <div class="cont-row">
     <button class="cont-btn" id="contBtn" disabled>🎧 持续对话</button>
@@ -154,7 +155,6 @@
     <button class="cont-btn" id="ttsBtn" disabled title="切换 TTS（stream 流式 / batch 整段）">🎵 TTS: …</button>
     <button class="cont-btn" id="sceneBtn" disabled title="切换收音场景（🎧 耳机近讲 / 🔊 扬声器外放——外放时播放期收音策略不同）">🎧 场景: …</button>
     <button class="cont-btn" id="cfgBtn" title="详细配置（模型/prompt/VAD 参数/场景）">⚙️ 配置</button>
-    <div class="hint" id="hint">按住说话 · 松开识别</div>
   </div>
   <div class="vad-info" id="vadInfo"></div>
 </footer>

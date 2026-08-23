@@ -42,7 +42,7 @@
       "silence_ms": 800,
       "vote_in": 7,
       "vote_exit": 5,
-      "energy_ratio": 4.0,
+      "energy_ratio": 4,
       "energy_floor_frame": 0.005,
       "energy_floor_seg": 0.012,
       "seg_speech_min_ratio": 0.35,
@@ -60,7 +60,7 @@
         "surge_ms": 400,
         "cut_on_surge": false,
         "pre_roll_ms": 250,
-        "tts_volume": 1.0
+        "tts_volume": 1
       },
       "speaker": {
         "surge_threshold": 1.6,

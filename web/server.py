@@ -240,8 +240,10 @@ class OmniVadJudge(VadJudge):
             playing = "是" if is_replying else "否"
         except Exception:
             playing = "否"
-        # prompt 支持 {playing} 占位符（config 可配——无占位符则原样使用）
-        system = self.prompt.format(playing=playing) if "{playing}" in self.prompt else self.prompt
+        # prompt 支持 {playing} 占位符（config 可配）。用 replace 而非 format——
+        # format 会把 prompt 里 JSON 模板的花括号（如 {"state": ...}）误当占位符
+        # 抛 KeyError（2026-08-22 实测：chat 500 err='"state"'）
+        system = self.prompt.replace("{playing}", playing)
         user = (
             f"AI 最近播放的回复：{json.dumps(list(last_replies or []), ensure_ascii=False)}\n"
             f"对话历史（最近3轮）：{json.dumps([m for m in history[-6:] if m.get('role') == 'user'][-3:] or history[-3:], ensure_ascii=False)}\n"
