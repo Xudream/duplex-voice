@@ -244,6 +244,7 @@ function applyFrontendConfig(fe) {
   if (v.silence_ms != null) CONT_SILENCE_MS = v.silence_ms;
   if (v.vote_in != null) CONT_VOTE_MIN = v.vote_in;
   if (v.vote_exit != null) CONT_VOTE_EXIT = v.vote_exit;
+  if (v.vote_win != null) CONT_VOTE_WIN = v.vote_win;
   if (v.energy_ratio != null) ENERGY_RATIO = v.energy_ratio;
   if (v.energy_floor_frame != null) ENERGY_FLOOR_FRAME = v.energy_floor_frame;
   if (v.energy_floor_seg != null) ENERGY_FLOOR_SEG = v.energy_floor_seg;
@@ -358,6 +359,7 @@ let SILERO_THRESHOLD = 0.5;      // 与桌面 RuleVadJudge 阈值一致
 let CONT_SILENCE_MS = 800;       // 判停：停顿 ≥800ms 视为说完（500ms 会抢答——中文口语停顿常超 500ms）
 let CONT_VOTE_MIN = 7;           // 进入语音 ≥70%（未激活时严格）
 let CONT_VOTE_EXIT = 5;          // 退出语音 <50%（滞回：语音中短停顿不中断）
+let CONT_VOTE_WIN = 10;          // 投票窗口（帧）——参数化时曾被误删导致 VAD 崩溃（2026-08-22）
 let ENERGY_RATIO = 4.0;          // 帧能量需 > 噪声底 × 4（挡 20 倍+衰减远场人声，不误杀轻声）
 let ENERGY_FLOOR_FRAME = 0.005;  // 帧级能量下限（宽松：轻声/近麦弱信号可触发）
 let ENERGY_FLOOR_SEG = 0.012;    // 段级能量下限（严格：用户语音峰值块 0.03+ 通过；背景人声 0.008 被挡）

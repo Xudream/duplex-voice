@@ -109,7 +109,7 @@ DEFAULT_CONFIG: dict = {
                 "voice": "Cherry", "sample_rate": 24000},
     },
     "frontend": {
-        "vad": {"silero_threshold": 0.5, "silence_ms": 800, "vote_in": 7, "vote_exit": 5,
+        "vad": {"silero_threshold": 0.5, "silence_ms": 800, "vote_in": 7, "vote_exit": 5, "vote_win": 10,
                 "energy_ratio": 4.0, "energy_floor_frame": 0.005, "energy_floor_seg": 0.012,
                 "seg_speech_min_ratio": 0.35, "env_silence_ms": 2000, "max_seg_ms": 15000,
                 "cooldown_ms": 10000, "pre_roll_ms": 500, "echo_sim": 0.7},
