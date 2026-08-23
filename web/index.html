@@ -141,14 +141,29 @@ let vadMode = null;   // 当前语义 VAD 模式（rule | omni）
 let ttsMode = null;   // 当前 TTS 模式（stream | batch）
 let sceneMode = localStorage.getItem('voice_scene') || 'headset';   // 收音场景（耳机近讲/扬声器外放）——localStorage 持久化
 
-// 收音场景行为注册表（可插拔——插入新场景只注册不改播放期代码）
+// 收音场景行为注册表（可插拔——每场景独立完整参数，互不污染；切换时重置全部播放期状态）
 const SCENE_BEHAVIOR = {
-  // 🎧 耳机近讲：无回声问题，现状（判停 800ms + 播放期 surge 400ms 停播）——已验证效果好，不动
-  headset: { playback: 'current' },
-  // 🔊 扬声器外放：TTS 声进 mic（AEC 残余）撑高 Silero → 静音判停永不触发。
-  //   突增即切段：降门槛（1.6 倍）+ 突增点即段起点（不丢开头）+ 突增回落立即切段停播
-  //   （不等 400ms→停播→静音判停 800ms 长链——TTS 声不消失判停永不满足）
-  speaker: { playback: 'surgeCut' },
+  // 🎧 耳机近讲：无回声漏音 → TTS 声被基线吸收不误触发；人声叠加突增持续 ≥400ms 才
+  //   停播，停播后靠静音判停切段（无回声可正常判停）——cutOnSurge=false 不主动切段
+  headset: {
+    surgeThreshold: 2.2,   // 突增倍数（高门槛——TTS 声起伏不误触发）
+    surgeFloor: 0.008,     // 基线下限
+    rmsFloor: 0.02,        // 帧能量下限
+    surgeMs: 400,          // 突增持续 ≥400ms 才停播（短促附和不触发）
+    cutOnSurge: false,     // 不主动切段（停播后靠静音判停 800ms 切段）
+    ttsVolume: 1.0,        // 播放音量（耳机不漏音，可满音量）
+  },
+  // 🔊 扬声器外放：TTS 声进 mic（AEC 残余）→ 静音判停永不触发 → 必须主动停播+切段。
+  //   低门槛（1.6 倍）+ 短时长（200ms）+ 切段停播（TTS 声消失→段干净→ASR 识别准）
+  //   + 播放音量降 0.6（进 mic 的 TTS 声减小，段更干净）
+  speaker: {
+    surgeThreshold: 1.6,
+    surgeFloor: 0.006,
+    rmsFloor: 0.015,
+    surgeMs: 200,          // 持续 ≥200ms 即真语音（短促"喂"<200ms 丢弃不打断）
+    cutOnSurge: true,      // 主动切段（段起点=突增点 - pre-roll）
+    ttsVolume: 0.6,
+  },
 };
 const sceneBehavior = () => SCENE_BEHAVIOR[sceneMode] || SCENE_BEHAVIOR.headset;
 
@@ -349,41 +364,28 @@ async function contLoop() {
     // 滑动学习 TTS 声基线，能量突增（人声 + TTS 声叠加 > 基线 2.2 倍）才判定用户语音 → 停播
     // （TTS 声自身被基线吸收不会误触发——与上次"Silero 即停播"方案的区别）
     if (isReplying && !userInterrupting) {
+      // 播放期收音——按场景注册表独立参数（headset/speaker 互不影响）
+      const sc = sceneBehavior();
       playBaseRms = playBaseRms * 0.92 + rms * 0.08;
-      if (sceneBehavior().playback === 'surgeCut') {
-        // 🔊 扬声器场景：突增即切段——门槛降（1.6 倍/0.015，远场人声+TTS 叠加；
-        //   耳机场景无回声用不到）。突增点即段起点（contSegStart 前移 250ms pre-roll），
-        //   突增回落（用户停说）切段发送——不停播，等语义确认（vad_state 决定打断/继续）。
-        const surged = playBaseRms > 0.006 && rms > playBaseRms * 1.6 && rms > 0.015;
-        if (surged) {
-          if (!surgeSince) {
-            surgeSince = Date.now();
-            contSegStart = Math.max(0, contPcm.length - 4000);   // 段起点 = 突增点 - 250ms
-            vlog('INFO', 'VAD', '扬声器场景：突增开始→段起点前移', { base: +playBaseRms.toFixed(4), rms: +rms.toFixed(4), at: contSegStart });
+      const surged = playBaseRms > sc.surgeFloor && rms > playBaseRms * sc.surgeThreshold && rms > sc.rmsFloor;
+      if (surged) {
+        if (!surgeSince) {
+          surgeSince = Date.now();
+          if (sc.cutOnSurge) contSegStart = Math.max(0, contPcm.length - 4000);   // 段起点=突增点 - 250ms
+        }
+        if (Date.now() - surgeSince >= sc.surgeMs) {
+          // 持续 ≥surgeMs → 真语音 → 停播（TTS 声消失，段干净→ASR 识别准）
+          userInterrupting = true; surgeSince = 0;
+          stopAllPlayback();
+          vlog('INFO', 'VAD', `播放期持续${sc.surgeMs}ms→停播`, { base: +playBaseRms.toFixed(4), rms: +rms.toFixed(4), scene: sceneMode });
+          if (sc.cutOnSurge) {
+            // speaker：主动切段（段含少量 TTS 尾音 → 跳占比过滤，server is_tts_echo 兜底）
+            flushContSegment(true);
           }
-        } else if (surgeSince) {
-          // 突增回落（用户停说）→ 切段发送——**不停播**！停播交给语义确认
-          // （vad_state：complete/barge_in → 停播真打断；backchannel/noise/tts_echo
-          //  → TTS 继续——"喂"这类招呼语不误打断播放）。段含 TTS 回声 → 跳占比过滤
-          // （server is_tts_echo 语义过滤兜底）。
-          const dur = Date.now() - surgeSince;
-          surgeSince = 0;
-          vlog('INFO', 'VAD', '扬声器场景：突增回落→切段（待语义确认，不停播）', { dur, at: contSegStart });
-          flushContSegment(true);
+          // headset：cutOnSurge=false → 停播后靠静音判停 800ms 切段（无回声可正常判停）
         }
       } else {
-        // 🎧 耳机场景（现状）：TTS 声被基线吸收不误触发；人声叠加突增持续 ≥400ms 才停播
-        const surged = playBaseRms > 0.008 && rms > playBaseRms * 2.2 && rms > 0.02;
-        if (surged) {
-          if (!surgeSince) surgeSince = Date.now();   // 突增开始
-          if (Date.now() - surgeSince >= 400) {       // 持续 ≥400ms → 真打断（短促附和不触发）
-            userInterrupting = true; surgeSince = 0;
-            stopAllPlayback();
-            vlog('INFO', 'VAD', '播放期能量突增≥400ms→停播', { base: +playBaseRms.toFixed(4), rms: +rms.toFixed(4) });
-          }
-        } else {
-          surgeSince = 0;   // 突增结束（"嗯/对"应声）→ 重置，不停播
-        }
+        surgeSince = 0;   // 突增结束（短促"嗯/对/喂"应声）→ 重置，不停播
       }
     }
     const isSpeech = contVoice ? (vote >= CONT_VOTE_EXIT) : (vote >= CONT_VOTE_MIN);
@@ -655,9 +657,11 @@ sceneBtn.addEventListener('click', () => {
   sceneMode = sceneMode === 'speaker' ? 'headset' : 'speaker';
   localStorage.setItem('voice_scene', sceneMode);
   sceneBtn.textContent = '🎧 场景: ' + (sceneMode === 'speaker' ? '扬声器' : '耳机');
-  surgeSince = 0;   // 场景切换立即重置突增状态
-  setStage('🎧 场景切换: ' + (sceneMode === 'speaker' ? '扬声器外放（播放期突增即切段）' : '耳机近讲（原策略）'));
-  vlog('INFO', 'SCENE_SWITCH', '切换', { scene: sceneMode });
+  // 切场景重置全部播放期状态——两场景参数完全独立，互不污染
+  surgeSince = 0; playBaseRms = 0; userInterrupting = false;
+  const sc = sceneBehavior();
+  setStage('🎧 场景切换: ' + (sceneMode === 'speaker' ? `扬声器外放（门槛${sc.surgeThreshold}·${sc.surgeMs}ms·音量${sc.ttsVolume}）` : `耳机近讲（门槛${sc.surgeThreshold}·${sc.surgeMs}ms·音量${sc.ttsVolume}）`));
+  vlog('INFO', 'SCENE_SWITCH', '切换', { scene: sceneMode, cfg: sc });
 });
 
 // ---- 阶段状态 ----
@@ -808,7 +812,14 @@ function pumpStream(idx) {
   buf.getChannelData(0).set(pcm);
   const src = ctx.createBufferSource();
   src.buffer = buf;
-  src.connect(ctx.destination);
+  // 播放音量按场景（speaker 0.6 降——进 mic 的 TTS 声减小；headset 1.0）
+  const vol = sceneBehavior().ttsVolume || 1;
+  if (vol !== 1) {
+    const g = ctx.createGain(); g.gain.value = vol;
+    src.connect(g); g.connect(ctx.destination);
+  } else {
+    src.connect(ctx.destination);
+  }
   if (metrics.tts_play == null && metrics.turn === turnId) {
     metrics.tts_play = Date.now() - sendEndEpoch;   // 说完→首个 PCM 块开始播放（流式响应）
     vlog('INFO', 'PLAY', '流式首块播放', { idx, ts: Date.now(), tts_play: metrics.tts_play });
@@ -1005,6 +1016,7 @@ async function sendAudio(b64) {
         const idx = d.idx;
         const a = new Audio(d.url);
         a.preload = 'auto';          // 到达即预下载（默认 metadata 只载头部，play() 时才下载→卡顿）
+        a.volume = sceneBehavior().ttsVolume || 1;   // 播放音量按场景（speaker 0.6）
         playQueue[idx] = a;
         const prev = playQueue[idx - 1];
         // play 成功才算在播（失败→解除抑制，防卡死导致后续段全被丢弃）
