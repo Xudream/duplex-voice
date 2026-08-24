@@ -64,6 +64,7 @@ CONFIG_PATH = WEB_DIR / "config.json"
 DEFAULT_CONFIG: dict = {
     "server": {
         "asr": {"provider": "dashscope", "model": "qwen3-asr-flash",
+                "mode": "stream",   # stream 流式（fun-asr，partial 实时）/ batch 非流式（qwen3-asr-flash 整段）
                 "ws_endpoint": "api-ws", "sample_rate": 16000, "task": "asr"},
         "fast_llm": {"provider": "ollama", "model": "qwen3.5:4b-mlx",
                      "base_url": "http://127.0.0.1:11434", "max_chars": 10,
@@ -173,6 +174,7 @@ print(f"[config] 已加载: {CONFIG_PATH.name if CONFIG_PATH.exists() else '内�
 
 # 模型变量（供 Provider 实例化——热生效时更新）
 ASR_MODEL = CFG["server"]["asr"]["model"]
+ASR_MODE = CFG["server"]["asr"].get("mode", "stream")   # stream 流式 / batch 非流式（⚙️ 面板可配）
 FAST_MODEL = CFG["server"]["fast_llm"]["model"]
 FAST_PROVIDER = CFG["server"]["fast_llm"].get("provider", "ollama")   # ollama 本地 | dashscope 云端
 FAST_BASE = CFG["server"]["fast_llm"].get("base_url", "http://127.0.0.1:11434")
@@ -418,10 +420,11 @@ def _apply_config(cfg: dict) -> dict:
     global CFG, ASR_MODEL, FAST_MODEL, FAST_BASE, SLOW_MODEL, OMNI_MODEL
     global TTS_BATCH_MODEL, TTS_STREAM_MODEL, TTS_VOICE, TTS_SAMPLE_RATE
     global asr, fast_llm, slow_llm, tts, tts_stream, vad_judge
-    global FAST_PROVIDER
+    global FAST_PROVIDER, ASR_MODE
     CFG = cfg
     s = cfg["server"]
     ASR_MODEL = s["asr"]["model"]
+    ASR_MODE = s["asr"].get("mode", "stream")
     FAST_MODEL = s["fast_llm"]["model"]
     FAST_PROVIDER = s["fast_llm"].get("provider", "ollama")
     FAST_BASE = s["fast_llm"].get("base_url", "http://127.0.0.1:11434")
@@ -591,7 +594,9 @@ async def chat(req: ChatRequest):
             asr_partial_count = 0
             asr_first_partial_ms = None   # 首个 partial 出现的 epoch 毫秒
             asr_final_ms = None           # final 定稿的 epoch 毫秒
-            async for evt in asr_stream.stream_recognize(gen_frames()):
+            # 按 ASR 模式选 provider（config server.asr.mode：stream 流式 partial / batch 整段）
+            _asr = asr_stream if ASR_MODE == "stream" else asr
+            async for evt in _asr.stream_recognize(gen_frames()):
                 if evt.type == "asr.partial":
                     asr_partial_count += 1
                     if asr_first_partial_ms is None:
