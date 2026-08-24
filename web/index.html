@@ -746,6 +746,7 @@ fusionBtn.addEventListener('click', async () => {
     if (!resp.ok || !d.ok) throw new Error(d.msg || 'HTTP ' + resp.status);
     fusionBtn.textContent = '🎙 融合: ' + (d.mode === 'direct' ? '直达' : '快慢');
     setStage('🎙 融合切换: ' + (d.mode === 'direct' ? '慢回复直达' : '快慢融合'));
+    stopAllPlayback();   // 融合策略切换 → 停止旧播放链（快慢↔直达切换旧链残留致重叠——2026-08-24 用户实测）
     vlog('INFO', 'FUSION', '切换', { mode: d.mode });
   } catch (e) {
     setStage('❌ 融合切换失败');
@@ -769,6 +770,7 @@ ttsBtn.addEventListener('click', async () => {
     ttsMode = d.mode;
     ttsBtn.textContent = '🎵 TTS: ' + (d.mode === 'stream' ? '流式' : '整段');
     setStage('🎵 TTS 切换: ' + (d.mode === 'stream' ? '流式（承接语边合成边播）' : '整段（全部合成完再播）'));
+    stopAllPlayback();   // TTS 模式切换 → 停止旧播放链（新旧模式播放叠加——2026-08-24 用户实测）
     vlog('INFO', 'TTS_SWITCH', '切换', { mode: d.mode });
   } catch (e) {
     setStage('❌ TTS 切换失败');
