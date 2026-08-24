@@ -308,7 +308,8 @@ let streamWaitIdx = null;   // 等待承接语播完的 playQueue 慢句 idx（�
 let fastStreamActive = false;   // 本轮存在承接语（fast 事件/idx=0 已到）——慢句必须等其播完
 let metrics = {};     // 各阶段时延（asr_text/asr_final/silence/slow_first/tts_first/total）
 let turnId = 0;       // 对话轮次（metrics 归属校验：done 后残留播放链的 playNow 不得污染下一轮）
-let speechStartEpoch = 0, speechEndEpoch = 0;   // 人开始说话/说完话的 epoch 毫秒（时延基准）
+let speechStartEpoch = 0, speechEndEpoch = 0;   // 人开始说话/判停确认的 epoch 毫秒
+let speechRealEndEpoch = 0;   // 人实际说完话的 epoch（最后一次语音帧——判停前；端到端时延基准，判停计入）
 let tSendStart = 0;                              // sendAudio 发出时刻（上传+ASR 时延起点）
 let isReplying = false;                          // AI 回复播放中（抑制 VAD 切段发送，防回声串扰）
 let userInterrupting = false;   // 播放期用户语音已触发停播（每轮发送后重置）
@@ -568,7 +569,8 @@ async function contLoop() {
           contVoice = false; contSilenceMs = 0;
           contCoolUntil = Date.now() + 2000;   // 冷却：防环境音判停后立即再触发
           contJudgeMs = Date.now() - contLastSpeechTs;   // 判停时长：语音结束→确认说完（显示'判停'）
-          speechEndEpoch = Date.now();   // 静音判停=人说完话
+          speechRealEndEpoch = contLastSpeechTs;   // 人实际说完=最后一次语音帧（端到端基准——判停计入）
+          speechEndEpoch = Date.now();   // 静音判停确认时刻
           vlog('INFO', 'VAD', '静音切段', { prob: +prob.toFixed(2), vote, segFrames: contSegTotal, segSpeech: contSegSpeech, reason: '静音判停' });
           contSilero.state.fill(0);   // 切段后 state 重置（与桌面 end_segment 一致）
           flushContSegment();
@@ -1098,6 +1100,7 @@ async function startRecord() {
 function stopRecord() {
   if (recording && mediaRecorder && mediaRecorder.state !== 'inactive') {
     speechEndEpoch = Date.now();   // 松开=人说完话
+    speechRealEndEpoch = speechEndEpoch;
     mediaRecorder.stop();
   }
   recording = false;
@@ -1180,7 +1183,7 @@ function pumpStream(idx) {
     src.connect(ctx.destination);
   }
   if (metrics.tts_play == null && metrics.turn === turnId) {
-    metrics.tts_play = Date.now() - sendEndEpoch;   // 说完→首个 PCM 块开始播放（流式响应）
+    metrics.tts_play = Date.now() - speechRealEndEpoch;   // 说完→首个 PCM 块开始播放（流式响应）
     vlog('INFO', 'PLAY', '流式首块播放', { idx, ts: Date.now(), tts_play: metrics.tts_play });
   }
   src.onended = () => {
@@ -1385,7 +1388,7 @@ async function sendAudio(b64) {
         const playNow = () => {
           vlog('INFO', 'PLAY2', 'playNow 调用', { idx, ts: Date.now(), tts_play: metrics.tts_play, turn: metrics.turn, turnId, sendEndEpoch, speechEndEpoch });
           if (metrics.tts_play == null && metrics.turn === turnId) {
-            metrics.tts_play = Date.now() - sendEndEpoch;   // 说完话→开始播放（用发送时快照，防全局被覆盖）
+            metrics.tts_play = Date.now() - speechRealEndEpoch;   // 说完话→开始播放（用发送时快照，防全局被覆盖）
             vlog('INFO', 'PLAY', '首个音频播放', { idx, ts: Date.now(), speechEndEpoch, tts_play: metrics.tts_play });
           }
           return a.play().then(() => { isReplying = true; vlog('INFO', 'PLAY2', 'play() 成功', { idx, ts: Date.now() }); }).catch((e) => { isReplying = false; vlog('WARN', 'PLAY2', 'play() 失败', { idx, err: String(e).slice(0, 80) }); });
@@ -1433,7 +1436,7 @@ async function sendAudio(b64) {
         }
         // 总计=说完话→开始播放（感知响应时延）；若 done 先于播放到达（承接语未播），
         // 用 done 时刻兜底，播放开始时 playNow 会更新 tts_play（见 tts_sentence 分支）
-        if (metrics.tts_play == null) metrics.tts_play = Date.now() - speechEndEpoch;
+        if (metrics.tts_play == null) metrics.tts_play = Date.now() - speechRealEndEpoch;
         metrics.total = metrics.tts_play;
         vlog('INFO', 'EVT', 'done', { total_ms: d.total_ms, speech_end: speechEndEpoch, asr_proc: metrics.asr_proc, asr_text: metrics.asr_text, silence: metrics.silence, slow_first: metrics.slow_first, tts_comp: metrics.tts_comp, tts_play: metrics.tts_play });
         const lat = document.createElement('span');
