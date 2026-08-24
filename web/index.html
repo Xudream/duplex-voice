@@ -1222,7 +1222,7 @@ function finishStream(idx) {
   streamFinished[idx] = true;
   const next = idx + 1;
   if (streamStates[next] && !streamFinished[next]) pumpStream(next);   // 句间接播
-  if (idx === 0) fastStreamActive = false;   // 承接语流式播完
+  if (idx === 0 || idx === -1) fastStreamActive = false;   // 承接语播完（整段 idx=0 / 流式 idx=-1）重置——原 bug：流式 idx=-1 永不重置致卡 true
   triggerStreamWait();   // 流式承接语播完 → 接播慢句
   if (Object.keys(streamStates).every(i => streamFinished[i])) {
     isReplying = false;   // 全部流式句播完
@@ -1397,13 +1397,14 @@ async function sendAudio(b64) {
         // 修复竞态：慢句子晚到时承接语可能已播完，addEventListener 挂在已 ended 的
         // Audio 上永不触发 → 之前慢通道有文字没声音。
         const st0 = streamStates[0];   // 流式承接语播放状态（idx=0 走 pumpStream 不走 playQueue）
+        const stNeg = streamStates[-1];   // 承接语流式实际 idx=-1（_fast_stream）——原 bug：查 st0 查错对象
         if (idx === 0) {
           // 承接语本身：直接播；播完触发等待的慢句（triggerStreamWait）
           a.addEventListener('ended', triggerStreamWait);
           isReplying = true;
           playNow();
-        } else if (!prev && (fastStreamActive || (st0 && st0.playing))) {
-          // 本轮有承接语（fast 事件已到 / 承接语流式在播 / 承接语整段已入队）——
+        } else if (!prev && (fastStreamActive || (st0 && st0.playing) || (stNeg && stNeg.playing))) {
+          // 本轮有承接语（fast 事件已到 / 承接语流式在播 idx=-1 / 承接语整段已入队）——
           // 慢句挂等承接语播完（finishStream 或 playQueue[0].ended 触发），防快慢重叠
           isReplying = true;
           streamWaitIdx = idx;
