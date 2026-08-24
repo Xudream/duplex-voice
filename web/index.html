@@ -197,7 +197,8 @@ let SCENE_BEHAVIOR = {
   //   停播，停播后靠静音判停切段（无回声可正常判停）——cutOnSurge=false 不主动切段
   headset: {
     surgeThreshold: 2.2,   // 突增倍数（高门槛——TTS 声起伏不误触发）
-    surgeFloor: 0.008,     // 基线下限
+    surgeFloor: 0.003,     // 基线下限（A 方案：0.008→0.003——安静环境（环境底 0.003-0.005）
+                           // 原值基线 < floor 导致播放期 surge 永不触发——插话识别不到）
     rmsFloor: 0.02,        // 帧能量下限
     surgeMs: 400,          // 突增持续 ≥400ms 才停播（短促附和不触发）
     cutOnSurge: false,     // 不主动切段（停播后靠静音判停 800ms 切段）
@@ -1238,6 +1239,7 @@ function pumpStream(idx) {
   st.sources.push(src);
   src.start();
   isReplying = true;
+  if (playBaseRms === 0) playBaseRms = Math.max(contNoiseFloor, 0.003);   // A 方案：播放开始基线用播放前环境底（非 0）——播放早期 surge 即可用（原从 0 学习需几十帧才过 floor）
 }
 function triggerStreamWait() {
   // 承接语（流式或整段）播完 → 触发等待的慢句（先播承接语，播完再播慢回复——防重叠）
@@ -1437,6 +1439,7 @@ async function sendAudio(b64) {
         const idx = d.idx;
         const a = new Audio(d.url);
         a.preload = 'auto';          // 到达即预下载（默认 metadata 只载头部，play() 时才下载→卡顿）
+        if (playBaseRms === 0) playBaseRms = Math.max(contNoiseFloor, 0.003);   // A 方案：同 pumpStream（整段播放起点基线初始化）
         a.volume = sceneBehavior().ttsVolume || 1;   // 播放音量按场景（speaker 0.6）
         playQueue[idx] = a;
         const prev = playQueue[idx - 1];
