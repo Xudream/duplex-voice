@@ -1,5 +1,6 @@
 {
   "server": {
+    "host": "llm-5ienv5iasbci5bt7.cn-beijing.maas.aliyuncs.com",
     "asr": {
       "provider": "dashscope",
       "model": "fun-asr-flash-2026-06-15",

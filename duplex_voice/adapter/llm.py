@@ -58,6 +58,7 @@ class OpenAICompatLLMProvider:
         payload: dict = {
             "model": self.model, "messages": messages,
             "stream": True, "temperature": temperature, "max_tokens": max_tokens,
+            "enable_thinking": False,   # 禁思考链：dashscope.aliyuncs.com 老端点 qwen3.5-27b 默认思考（1138 块 reasoning_content 40s+）→ 1s 直接内容（2026-08-24 实测）
         }
         if tools:
             payload["tools"] = tools

@@ -39,7 +39,7 @@ from duplex_voice.adapter.llm import (
 from duplex_voice.adapter.tts import Qwen3TTSProvider
 from duplex_voice.adapter.tts_stream import Qwen3TTSStream
 
-HOST = "llm-5ienv5iasbci5bt7.cn-beijing.maas.aliyuncs.com"
+HOST = "llm-5ienv5iasbci5bt7.cn-beijing.maas.aliyuncs.com"   # 默认专属空间（config server.host 可覆盖——dashscope.aliyuncs.com 老公共端点）
 WEB_DIR = Path(__file__).resolve().parent
 TTS_CACHE = WEB_DIR / "tts_cache"   # 本地 TTS 音频缓存（server 代下载，前端播放不走公网）
 
@@ -63,6 +63,7 @@ CONFIG_PATH = WEB_DIR / "config.json"
 
 DEFAULT_CONFIG: dict = {
     "server": {
+        "host": "llm-5ienv5iasbci5bt7.cn-beijing.maas.aliyuncs.com",   # 专属空间 | dashscope.aliyuncs.com（老公共端点）
         "asr": {"provider": "dashscope", "model": "fun-asr-flash-2026-06-15",   # 默认流式模型（mode=stream 联动）
                 "mode": "stream",   # stream 流式（fun-asr，partial 实时）/ batch 非流式（qwen3-asr-flash 整段）
                 "ws_endpoint": "api-ws", "sample_rate": 16000, "task": "asr"},
@@ -170,6 +171,7 @@ def _mask_cfg(cfg: dict) -> dict:
 
 
 CFG = _load_config()
+HOST = CFG["server"].get("host", HOST)   # config server.host 覆盖（专属空间 | dashscope.aliyuncs.com 老公共端点）
 print(f"[config] 已加载: {CONFIG_PATH.name if CONFIG_PATH.exists() else '内置默认'}")
 
 # 模型变量（供 Provider 实例化——热生效时更新）
@@ -397,7 +399,7 @@ PENDING_TTL_S = 3   # incomplete 缓存 3s 无续说则过期丢弃（用户要�
 FRONTEND_LOGS: deque[str] = deque(maxlen=3000)   # 前端自动上报日志（定位问题用）
 
 asr = Qwen3ASRProvider(host=HOST, api_key=KEY, model=ASR_MODEL)
-asr_stream = FunASRStreamProvider(host=HOST, api_key=KEY)   # 真流式（fun-asr，partial 实时）
+asr_stream = FunASRStreamProvider(host=HOST, api_key=KEY, model=ASR_MODEL)   # 真流式（fun-asr/paraformer——config asr.model 可配）
 
 
 def _make_fast_llm():
@@ -420,9 +422,10 @@ def _apply_config(cfg: dict) -> dict:
     global CFG, ASR_MODEL, FAST_MODEL, FAST_BASE, SLOW_MODEL, OMNI_MODEL
     global TTS_BATCH_MODEL, TTS_STREAM_MODEL, TTS_VOICE, TTS_SAMPLE_RATE
     global asr, fast_llm, slow_llm, tts, tts_stream, vad_judge
-    global FAST_PROVIDER, ASR_MODE
+    global FAST_PROVIDER, ASR_MODE, HOST
     CFG = cfg
     s = cfg["server"]
+    HOST = s.get("host", HOST)   # host 热生效（dashscope.aliyuncs.com 老公共端点切换）
     ASR_MODEL = s["asr"]["model"]
     ASR_MODE = s["asr"].get("mode", "stream")
     FAST_MODEL = s["fast_llm"]["model"]
@@ -441,6 +444,7 @@ def _apply_config(cfg: dict) -> dict:
     _STRATS["direct"].custom_slow_prompt = s["slow_llm"]["prompt_direct"]
     # 重建 Provider（模型/端点变化即时生效）
     asr = Qwen3ASRProvider(host=HOST, api_key=KEY, model=ASR_MODEL)
+    asr_stream = FunASRStreamProvider(host=HOST, api_key=KEY, model=ASR_MODEL)   # 流式 ASR 也重建（host/model 切换即时生效——2026-08-24 补）
     fast_llm = _make_fast_llm()
     slow_llm = OpenAICompatLLMProvider(
         base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=SLOW_MODEL)
