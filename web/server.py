@@ -706,6 +706,26 @@ async def chat(req: ChatRequest):
                         async with tts_sem:
                             return await asyncio.to_thread(_local_tts, sub)
 
+                    async def _slow_stream(sub: str, i: int, q):
+                        """慢句分句流式（TTS_MODE=stream）：realtime WS 边合成边播——
+                        qwen3-tts-realtime 首块 ~0.5s 出声；长句拆短句（15-40 字）
+                        规避'长句流式中间等块卡顿'；失败回退整段。"""
+                        async with tts_sem:
+                            try:
+                                first_ms = await tts_stream.synth(
+                                    sub, lambda pcm, i=i: q.put_nowait(
+                                        ("audio_chunk", i, base64.b64encode(pcm).decode())))
+                                q.put_nowait(("audio_end", i, first_ms))
+                            except Exception as e:
+                                log.error("STREAM_TTS_ERR cid=%s slow idx=%d err=%s → 回退整段",
+                                          req.client_id, i, str(e)[:80])
+                                try:
+                                    u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, sub)
+                                    q.put_nowait(("tts_sentence_fb", i, u, tts_ms, dl_ms))
+                                except Exception as e2:
+                                    log.error("TTS_FB_ERR cid=%s slow idx=%d err=%s",
+                                              req.client_id, i, str(e2)[:80])
+
                     def flush():
                         nonlocal buf, sidx
                         s = buf.strip()
@@ -726,9 +746,12 @@ async def chat(req: ChatRequest):
                             i = sidx
                             sidx += 1
                             ts = time.time()
-                            # 慢句一律整段并行合成（实测 realtime WS 合成 2.4x 慢于实时，
-                            # 长句流式播放会中间等块卡顿；整段 ~2.5s 就绪，承接语播完无缝接播）
-                            pending[i] = asyncio.create_task(_synth(sub))
+                            # 慢句合成：流式模式=分句流式（realtime WS 首块 ~0.5s，拆短句防卡顿）；
+                            # 整段模式=整段并行（~2.5s 就绪，承接语播完无缝接播）
+                            if TTS_MODE["mode"] == "stream":
+                                pending[i] = asyncio.create_task(_slow_stream(sub, i, slow_events))
+                            else:
+                                pending[i] = asyncio.create_task(_synth(sub))
                             tts_t0[i] = ts
 
                     try:
@@ -750,9 +773,12 @@ async def chat(req: ChatRequest):
                         print(f"[slow] 失败: {e}")
                     for i in sorted(pending):
                         try:
-                            u, tts_ms, dl_ms = await pending[i]
-                            slow_events.put_nowait(
-                                ("tts_sentence", i, u, int((time.time() - tts_t0[i]) * 1000), dl_ms))
+                            r = await pending[i]
+                            if TTS_MODE["mode"] != "stream":
+                                # 整段：事件在此发（流式任务已自行入队 audio_chunk/audio_end）
+                                u, tts_ms, dl_ms = r
+                                slow_events.put_nowait(
+                                    ("tts_sentence", i, u, int((time.time() - tts_t0[i]) * 1000), dl_ms))
                         except Exception as e:
                             log.error("TTS_ERR cid=%s sentence=%d err=%s", req.client_id, i, e)
                     slow_events.put_nowait((("slow_done",)))
