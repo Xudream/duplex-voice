@@ -1290,9 +1290,12 @@ function stopAllPlayback() {
   isReplying = false;
 }
 async function sendAudio(b64) {
-  if (busy) return;   // 防重入（持续模式段与按住说话并发）
+  if (busy && !isReplying) return;   // 防重入：busy 且非播放期（正常回复生成中——追问缓存走 pendingBusy）；播放期插话（isReplying）→ 打断优先——允许重入（全双工 2026-08-24——原 busy 无条件拦截→播放期插话丢弃→'识别中'假象）
   busy = true; btn.disabled = true; btn.classList.add('thinking');
-  if (window._chatAc) { window._chatAc.abort(); window._chatAc = null; }   // 播放期插话打断：abort 旧 SSE 生成（server 断开自动停止——全双工打断 2026-08-24）
+  if (window._chatAc) {
+    window._chatStale = true;   // 标记旧请求为"被打断"——其 catch/finally 静默退出（不误报超时、不 endBusy 破坏新请求状态）
+    window._chatAc.abort(); window._chatAc = null;   // 播放期插话打断：abort 旧 SSE 生成（server 断开自动停止——全双工打断 2026-08-24）
+  }
   stopAllPlayback();   // 新轮无条件停旧播放（第一轮慢句 done 后仍在播——不停止则第二轮与残留混播重叠——2026-08-24 系统性定位）
   isReplying = false;
   latRow = null;   // 新轮：时延行重建（实时更新）
@@ -1339,18 +1342,22 @@ async function sendAudio(b64) {
       }
     }
   } catch (e) {
-    if (e.name === 'AbortError') {
+    if (window._chatStale) {
+      // 被新请求（播放期插话）打断——静默退出（不算错误）
+      vlog('INFO', 'SEND', '被新请求打断（旧 SSE 中止）');
+    } else if (e.name === 'AbortError') {
       vlog('ERROR', 'SEND', '超时中断（30s）');
       setStage('❌ 回复超时（30s），请重试');
     } else {
       vlog('ERROR', 'SEND', '请求失败', { err: String(e).slice(0, 120) });
       setStage('❌ 请求失败: ' + e.message);
     }
-    if (aiMsg) aiMsg.remove();
+    if (!window._chatStale && aiMsg) aiMsg.remove();
   } finally {
     clearTimeout(timer);
   }
-  endBusy();
+  if (window._chatStale) { window._chatStale = false; }   // 旧请求被打断：不 endBusy（busy 由新请求管理——防新请求 busy 被清）
+  else endBusy();
 
   function handleEvent(d) {
     switch (d.type) {
