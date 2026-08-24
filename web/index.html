@@ -1246,6 +1246,10 @@ function triggerStreamWait() {
       // （idx+1）仍挂其 ended 接播（置空会破坏链 → 后续句直接播 → 重叠）
       vlog('INFO', 'PLAY', '承接语播完→接播慢句', { idx: streamWaitIdx, ts: Date.now() });
       a.play().then(() => { isReplying = true; }).catch(e => { isReplying = false; vlog('WARN', 'PLAY', '慢句播放失败', { err: String(e).slice(0, 80) }); });
+    } else if (streamStates[streamWaitIdx] && streamStates[streamWaitIdx].chunks.length) {
+      // 流式慢句（audio_chunk 挂等——不在 playQueue）→ 接播 PCM 块（2026-08-24 老端点流式重叠修复）
+      vlog('INFO', 'PLAY', '承接语播完→接播慢句流式', { idx: streamWaitIdx, ts: Date.now() });
+      pumpStream(streamWaitIdx);
     }
     streamWaitIdx = null;
   }
@@ -1392,7 +1396,12 @@ async function sendAudio(b64) {
         if (!streamStates[d.idx]) streamStates[d.idx] = { chunks: [], done: false, playing: false, sources: [] };
         streamStates[d.idx].chunks.push(b64ToPcm(d.b64));
         clearTimeout(streamStates[d.idx]._finishTimer);   // 新块到达 → 取消 300ms 兜底完成
-        pumpStream(d.idx);
+        // 慢句流式块到达但承接语（idx=-1 流式）在播 → 挂等（块先缓存，承接语播完 triggerStreamWait 接播——防重叠 2026-08-24 老端点实测）
+        if (d.idx >= 1 && (fastStreamActive || (streamStates[-1] && streamStates[-1].playing))) {
+          if (streamWaitIdx == null) streamWaitIdx = d.idx;
+        } else {
+          pumpStream(d.idx);
+        }
         break;
       case 'audio_end':
         // 句子流式完成（first_ms=文本→首个 PCM 块时延）
@@ -1400,7 +1409,10 @@ async function sendAudio(b64) {
         updateLatency();
         if (streamStates[d.idx]) {
           streamStates[d.idx].done = true;
-          if (!streamStates[d.idx].chunks.length) finishStream(d.idx);   // 无块直接完成
+          if (!streamStates[d.idx].chunks.length) {
+            if (streamWaitIdx === d.idx) streamWaitIdx = null;   // 挂等句无块（空句）→ 解除挂等防卡
+            finishStream(d.idx);   // 无块直接完成
+          }
         } else {
           streamFinished[d.idx] = true;
         }
