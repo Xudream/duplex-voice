@@ -638,11 +638,13 @@ async function flushContSegment(skipRatioCheck) {
   pcm.set(contPcm.slice(contSegStart));   // slice（普通数组无 subarray，subarray 会 TypeError 静默失败）
   contPcm = []; contSegSpeech = 0; contSegTotal = 0;
   if (!contMode) return;
-  if (busy) {
+  if (busy && !isReplying) {
     // busy（回复生成中）时段的真实语音段不静默丢弃——缓存，回复完成后
     // 作为新指令发送（用户等不及的追问/打断，如"快一点"）。已通过
     // 语音占比/能量/时长过滤（prob 0.94 的段=真实语音；回声段已被
     // isReplying 分支与回声过滤拦截）。多段覆盖保留最新（最近意图）。
+    // ⚠️ 2026-08-24 修复：isReplying（播放期插话）优先于 busy 缓存——
+    // 原顺序 busy 先拦截→播放期插话被缓存等 done → '播放完才处理'（用户实测）
     pendingBusy = { pcm, ts: Date.now() };
     vlog('WARN', 'FLUSH', 'busy 期语音：缓存待回复完成后发送（不丢弃）', { frames: pcm.length, ms: Math.round(pcm.length / 16) });
     return;
@@ -1290,6 +1292,7 @@ function stopAllPlayback() {
 async function sendAudio(b64) {
   if (busy) return;   // 防重入（持续模式段与按住说话并发）
   busy = true; btn.disabled = true; btn.classList.add('thinking');
+  if (window._chatAc) { window._chatAc.abort(); window._chatAc = null; }   // 播放期插话打断：abort 旧 SSE 生成（server 断开自动停止——全双工打断 2026-08-24）
   stopAllPlayback();   // 新轮无条件停旧播放（第一轮慢句 done 后仍在播——不停止则第二轮与残留混播重叠——2026-08-24 系统性定位）
   isReplying = false;
   latRow = null;   // 新轮：时延行重建（实时更新）
@@ -1306,6 +1309,7 @@ async function sendAudio(b64) {
   tSendStart = performance.now();   // 请求发出时刻（上传+ASR 处理时延起点）
   // 超时保护：慢通道异常/网络卡死时 30s 强制恢复（防 busy 永久占用导致后续说话全被丢弃）
   const ac = new AbortController();
+  window._chatAc = ac;   // 全局保存——播放期插话 abort 旧生成（全双工打断）
   const timer = setTimeout(() => ac.abort(), 30000);
   try {
     const resp = await fetch('/api/chat', {
