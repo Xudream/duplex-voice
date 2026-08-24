@@ -81,6 +81,7 @@ DEFAULT_CONFIG: dict = {
                                        "首句直接给出核心结果，细节放第二句。")},
         "omni": {"provider": "dashscope", "model": "qwen3.5-omni-flash",
                  "temperature": 0, "max_tokens": 64,
+                 "judge_mode": "text",   # 语义 VAD 判断模式：text 文本判断（老方案，ASR 后）/ audio 音频直判（新方案，当前轮音频+文本上下文，与 ASR 并行）——并存可切换
                  "prompt": ("你是全双工语音对话系统的语义 VAD（语音活动检测）。给定用户语音转写文本、"
                             "AI 最近播放的回复、对话历史，判断用户当前状态。只输出 JSON，不要其他内容："
                             '{"state": "complete|incomplete|backchannel|barge_in|noise|tts_echo|reject", "reason": "简短理由"}'
@@ -170,6 +171,7 @@ def _mask_cfg(cfg: dict) -> dict:
 
 CFG = _load_config()
 HOST = CFG["server"].get("host", HOST)   # config server.host 覆盖（专属空间 | dashscope.aliyuncs.com 老公共端点）
+VAD_JUDGE_MODE = CFG["server"]["omni"].get("judge_mode", "text")   # 语义 VAD 判断模式：text（老方案）/ audio（新方案音频直判）——并存可切换
 print(f"[config] 已加载: {CONFIG_PATH.name if CONFIG_PATH.exists() else '内置默认'}")
 
 # 模型变量（供 Provider 实例化——热生效时更新）
@@ -285,6 +287,44 @@ class OmniVadJudge(VadJudge):
                 pass
             log.warning("VADJUDGE cid=- omni 重试仍失败 → 回退 rule")
             return await self._fallback.judge(text, history, last_replies)
+
+    async def judge_audio(self, audio_b64: str, history: list[dict], last_replies=(),
+                          is_replying: bool = False) -> tuple[str, str]:
+        """音频直判：当前轮给音频（multimodal-generation），上下文给文本——不等 ASR 结果。
+        实验分支 feat/audio-vad-judge：与 ASR 并行启动，判断完成即决策（打断/噪声更早）。"""
+        try:
+            playing = "是" if is_replying else "否"
+        except Exception:
+            playing = "否"
+        system = self.prompt.replace("{playing}", playing)
+        user_ctx = (
+            f"AI 最近播放的回复：{json.dumps(list(last_replies or []), ensure_ascii=False)}\n"
+            f"对话历史（最近3轮）：{json.dumps([m for m in history[-6:] if m.get('role') == 'user'][-3:] or history[-3:], ensure_ascii=False)}\n"
+            "请结合上面上下文，判断用户这段音频（语音）的状态："
+        )
+        b64 = audio_b64 if "base64" in audio_b64 else f"data:audio/wav;base64,{audio_b64}"
+        body = {
+            "model": self.model,
+            "input": {"messages": [{"role": "user", "content": [
+                {"audio": b64}, {"text": user_ctx}]}]},
+            "parameters": {"temperature": 0.0, "max_tokens": 64},
+        }
+        try:
+            r = await _post_json(f"https://{self.host}/api/v1/services/aigc/multimodal-generation/generation",
+                                 headers={"Authorization": f"Bearer {self.api_key}"}, json=body,
+                                 timeout=15.0)
+            out = r["output"]["choices"][0]["message"]["content"]
+            if isinstance(out, list):
+                out = "".join(x.get("text", "") for x in out if isinstance(x, dict))
+            state = _extract_state(out)
+            if state is None:
+                log.warning("VADJUDGE cid=- omni-audio 输出无法解析: %r", out[:80])
+                return await self._fallback.judge("", history, last_replies)
+            return state, out[:60]
+        except Exception as e:
+            # 音频直判失败 → 回退 rule（确定性兜底——不阻塞流程）
+            log.warning("VADJUDGE cid=- omni-audio 调用失败(%s) → 回退 rule", str(e)[:80])
+            return await self._fallback.judge("", history, last_replies)
 
 
 def _extract_state(content: str) -> str | None:
@@ -420,10 +460,11 @@ def _apply_config(cfg: dict) -> dict:
     global CFG, ASR_MODEL, FAST_MODEL, FAST_BASE, SLOW_MODEL, OMNI_MODEL
     global TTS_BATCH_MODEL, TTS_STREAM_MODEL, TTS_VOICE, TTS_SAMPLE_RATE
     global asr, fast_llm, slow_llm, tts, tts_stream, vad_judge
-    global FAST_PROVIDER, ASR_MODE, HOST
+    global FAST_PROVIDER, ASR_MODE, HOST, VAD_JUDGE_MODE
     CFG = cfg
     s = cfg["server"]
     HOST = s.get("host", HOST)   # host 热生效（dashscope.aliyuncs.com 老公共端点切换）
+    VAD_JUDGE_MODE = s["omni"].get("judge_mode", "text")   # 判断模式热生效（text/audio）
     ASR_MODEL = s["asr"]["model"]
     ASR_MODE = s["asr"].get("mode", "stream")
     FAST_MODEL = s["fast_llm"]["model"]
@@ -582,6 +623,14 @@ async def chat(req: ChatRequest):
                      req.client_id, len(wav_bytes) / 32000,
                      req.speech_start_ms or "-", req.speech_end_ms or "-")
             data_url = f"data:audio/wav;base64,{req.audio_b64}"
+            # 1.5 音频直判语义 VAD（实验分支 feat/audio-vad-judge）：当前轮音频直接给 omni
+            # （multimodal-generation），上下文给文本——与 ASR 并行，判断完成即决策
+            vad_task = None
+            if VAD_JUDGE_MODE == "audio" and hasattr(vad_judge, "judge_audio"):
+                vad_task = asyncio.create_task(vad_judge.judge_audio(
+                    req.audio_b64, HISTORIES.get(req.client_id, []),
+                    LAST_REPLY.get(req.client_id, ""), is_replying=req.is_replying))
+                log.info("VADJUDGE cid=%s 音频直判并行启动（不等 ASR）", req.client_id)
             # 1. ASR 真流式（fun-asr：整段 wav → 帧流上行 → partial 实时推送）
             yield 'data: {"type":"stage","stage":"asr"}\n\n'
             t0 = time.time()
@@ -635,9 +684,27 @@ async def chat(req: ChatRequest):
                     log.info("VADJUDGE cid=%s 续说合并: %r + %r", req.client_id,
                              pending["text"], asr_text)
             t_vad = time.time()   # 语义 VAD 判断时延起点
-            vstate, vreason = await vad_judge.judge(
-                merged_text, HISTORIES.get(req.client_id, []), LAST_REPLY.get(req.client_id, ""),
-                is_replying=req.is_replying)
+            if vad_task is not None:
+                # 音频直判（新方案 judge_mode=audio）：vad_task 与 ASR 并行——已完成直接取
+                # （省判断时间）；失败/异常 → 回退文本判断（双保险——老方案并存）
+                try:
+                    vstate, vreason = await vad_task
+                    if vstate is None:
+                        vstate, vreason = await vad_judge.judge(
+                            merged_text, HISTORIES.get(req.client_id, []),
+                            LAST_REPLY.get(req.client_id, ""), is_replying=req.is_replying)
+                    else:
+                        log.info("VADJUDGE cid=%s 音频直判: state=%s vad=%dms", req.client_id, vstate,
+                                 int((time.time() - t_vad) * 1000))
+                except Exception as e:
+                    log.warning("VADJUDGE cid=%s 音频直判异常(%s) → 文本判断兜底", req.client_id, str(e)[:60])
+                    vstate, vreason = await vad_judge.judge(
+                        merged_text, HISTORIES.get(req.client_id, []),
+                        LAST_REPLY.get(req.client_id, ""), is_replying=req.is_replying)
+            else:
+                vstate, vreason = await vad_judge.judge(
+                    merged_text, HISTORIES.get(req.client_id, []), LAST_REPLY.get(req.client_id, ""),
+                    is_replying=req.is_replying)
             # 打断决策状态机：语义状态（模型判断）× 播放状态（确定性事实）→ 行为
             # 模型只判断"是否要响应"；打断与否由"AI 是否在播放 TTS"决定
             fsm = BargeDecisionFSM()

@@ -817,6 +817,8 @@ const CFG_FIELDS = {
     ['server.fast_llm.max_chars', '承接语字数上限', 'number', '⚡ 快 LLM（承接语）'],
     ['server.slow_llm.model', '模型', 'text', '🐢 慢 LLM（云端深度回复）'],
     ['server.slow_llm.max_tokens', 'max_tokens', 'number', '🐢 慢 LLM（云端深度回复）'],
+    ['server.omni.judge_mode', '判断模式', 'select', '🧠 Omni 语义 VAD',
+     [{ v: 'text', l: '文本判断（ASR 后——老方案）' }, { v: 'audio', l: '音频直判（当前轮音频+文本上下文，与 ASR 并行——新方案）' }]],
     ['server.omni.model', '模型', 'text', '🧠 Omni 语义 VAD'],
     ['server.omni.temperature', 'temperature', 'number', '🧠 Omni 语义 VAD'],
     ['server.omni.max_tokens', 'max_tokens', 'number', '🧠 Omni 语义 VAD'],
