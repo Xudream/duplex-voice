@@ -1497,8 +1497,14 @@ function updateLatency() {
   if (!latRow) {
     latRow = document.createElement('span');
     latRow.className = 'lat';
-    if (aiMsg) aiMsg.appendChild(latRow);
-    else if (userMsg) userMsg.appendChild(latRow);
+    // aiMsg 是 sendAudio 局部变量（闭包内可见）——全局 updateLatency 用 typeof 防护；
+    // userMsg 有全局声明（asr 事件时已创建 user 气泡）——挂最新气泡（2026-08-24 修复 ReferenceError）
+    const host = (typeof aiMsg !== 'undefined' && aiMsg) || userMsg;
+    if (host) host.appendChild(latRow);
+    else {
+      const msgs = document.querySelectorAll('#chat .msg');
+      (msgs[msgs.length - 1] || chat).appendChild(latRow);
+    }
   }
   latRow.textContent = `⏱ 上传+ASR ${fmt(metrics.asr_proc)} · 定稿 ${fmt(metrics.asr_final)} · 判停 ${fmt(contJudgeMs || null)} · 语义VAD ${fmt(vadMode === 'omni' ? metrics.vad_judge : null)} · LLM快 ${fmt(metrics.llm_fast)} · LLM慢 ${fmt(metrics.llm_slow)} · TTS合成 ${fmt(metrics.tts_comp)}·公网下载 ${fmt(metrics.tts_dl)} · 响应(说完→开始播) ${fmt(metrics.total)}`;
   }
