@@ -34,7 +34,8 @@
       "batch_model": "qwen3-tts-instruct-flash",
       "stream_model": "qwen3-tts-instruct-flash-realtime",
       "voice": "Cherry",
-      "sample_rate": 24000
+      "sample_rate": 24000,
+      "mode": "stream"
     }
   },
   "frontend": {
