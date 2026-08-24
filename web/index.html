@@ -1338,11 +1338,11 @@ async function sendAudio(b64) {
         metrics.llm_fast = d.latency_ms;
         fastStreamActive = true;   // 本轮有承接语 → 慢句必须等其播完（防重叠）
         if (!aiMsg) aiMsg = addMsg('ai', '');
-        if (latRow && latRow.parentNode !== aiMsg) aiMsg.appendChild(latRow);   // 时延行迁移到回复气泡（asr 阶段挂 user——AI 回复出现即迁——2026-08-24）
         metrics.fast = d.latency_ms;
         const fastLbl = d.provider === 'dashscope' ? `云端 ${d.model}` : `本地 ${d.model}`;
         aiHtml += `<span class="tag"><span class="fast-tag">⚡ 承接语</span> · ${escapeHtml(fastLbl)}</span><div class="fast-text">${escapeHtml(d.text)}</div>`;
         aiMsg.innerHTML = aiHtml;
+        if (latRow) aiMsg.appendChild(latRow);   // 时延行挂回复气泡（innerHTML 后重新挂——不丢——2026-08-24）
         updateLatency();
         break;
       case 'slow_first':
@@ -1352,9 +1352,9 @@ async function sendAudio(b64) {
         break;
       case 'slow_delta':
         if (!aiMsg) aiMsg = addMsg('ai', '');
-        if (latRow && latRow.parentNode !== aiMsg) aiMsg.appendChild(latRow);   // 时延行迁移到回复气泡（慢直达无 fast 时——slow_delta 创建 AI 气泡即迁）
         aiHtml += escapeHtml(d.delta);
         aiMsg.innerHTML = aiHtml + '<span class="caret"></span>';
+        if (latRow) aiMsg.appendChild(latRow);   // 时延行挂回复气泡（每帧 innerHTML 后重新挂——2026-08-24）
         $('main').scrollTop = $('main').scrollHeight;
         break;
       case 'audio_chunk':
@@ -1381,6 +1381,7 @@ async function sendAudio(b64) {
         // 句子音频入队 → 链式连续播放（句 idx 播完自动播下一句）
         if (d.idx === 0) { stopAllPlayback(); fastStreamActive = true; }   // 新轮承接语 → 停上一轮残留播放（barge-in 防重叠）
         aiMsg.innerHTML = aiHtml;
+        if (latRow) aiMsg.appendChild(latRow);   // tts_sentence 渲染也重新挂（innerHTML 清子节点——2026-08-24）
         setStage('🔊 播放回复…');
         (metrics.tts = metrics.tts || []).push(d.latency_ms);
 
@@ -1455,6 +1456,7 @@ async function sendAudio(b64) {
         metrics.total = metrics.tts_play;
         vlog('INFO', 'EVT', 'done', { total_ms: d.total_ms, speech_end: speechEndEpoch, asr_proc: metrics.asr_proc, asr_text: metrics.asr_text, silence: metrics.silence, slow_first: metrics.slow_first, tts_comp: metrics.tts_comp, tts_play: metrics.tts_play });
         updateLatency();   // 最终刷新（total 兜底已赋值）
+        if (latRow && !latRow.parentNode) chat.appendChild(latRow);   // 无回复（error）兜底挂 chat 尾部——绝不挂 user（2026-08-24）
         // 注意：不在 done 重置 metrics——残留播放链（慢句 done 后播放）的 playNow
         // 用 turn 校验（metrics.turn === turnId）防止污染下一轮；sendAudio 开头重建
         setStage(''); setHint('按住说话 · 松开识别');
@@ -1499,14 +1501,7 @@ function updateLatency() {
   if (!latRow) {
     latRow = document.createElement('span');
     latRow.className = 'lat';
-    // aiMsg 是 sendAudio 局部变量（闭包内可见）——全局 updateLatency 用 typeof 防护；
-    // userMsg 有全局声明（asr 事件时已创建 user 气泡）——挂最新气泡（2026-08-24 修复 ReferenceError）
-    const host = (typeof aiMsg !== 'undefined' && aiMsg) || userMsg;
-    if (host) host.appendChild(latRow);
-    else {
-      const msgs = document.querySelectorAll('#chat .msg');
-      (msgs[msgs.length - 1] || chat).appendChild(latRow);
-    }
+    // 不挂 user/不迁移——detached 由 AI 气泡更新处 appendChild 挂到回复（innerHTML 覆盖会丢——2026-08-24）
   }
   latRow.textContent = `⏱ 上传+ASR ${fmt(metrics.asr_proc)} · 定稿 ${fmt(metrics.asr_final)} · 判停 ${fmt(contJudgeMs || null)} · 语义VAD ${fmt(vadMode === 'omni' ? metrics.vad_judge : null)} · LLM快 ${fmt(metrics.llm_fast)} · LLM慢 ${fmt(metrics.llm_slow)} · TTS合成 ${fmt(metrics.tts_comp)}·公网下载 ${fmt(metrics.tts_dl)} · 响应(说完→开始播) ${fmt(metrics.total)}`;
   }
