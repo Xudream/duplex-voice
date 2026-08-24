@@ -104,12 +104,24 @@ class Qwen3ASRProvider:
 
     async def stream_recognize(self, frames, *, language="zh", partial=True) -> AsyncIterator[Event]:
         async for frame in frames:
-            self._segment.append(frame.pcm if hasattr(frame, "pcm") else frame)
+            if hasattr(frame, "pcm"):
+                self._segment.append(frame.pcm)      # Frame 对象（桌面版）
+            elif isinstance(frame, (bytes, bytearray)):
+                self._segment.append(frame)          # WAV 字节切片（web server 版）
+            else:
+                self._segment.append(frame)          # np 数组
         if not self._segment:
             return
-        pcm = np.concatenate(self._segment).astype(np.int16)
-        b64 = base64.b64encode(pcm.tobytes()).decode()
-        data_url = f"data:audio/wav;base64,{b64}"
+        first = self._segment[0]
+        if isinstance(first, (bytes, bytearray)):
+            # web 场景：WAV 切片拼接（含 WAV 头）→ 直接发 data_url
+            wav = b"".join(self._segment)
+            data_url = f"data:audio/wav;base64,{base64.b64encode(wav).decode()}"
+        else:
+            # 桌面版：np 数组拼接（裸 PCM）
+            pcm = np.concatenate(self._segment).astype(np.int16)
+            b64 = base64.b64encode(pcm.tobytes()).decode()
+            data_url = f"data:audio/wav;base64,{b64}"
         text = await asyncio.to_thread(self._recognize, data_url)
         duration_ms = len(self._segment) * 30
         if text:
