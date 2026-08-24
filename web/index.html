@@ -1156,16 +1156,23 @@ function pcmToWavBase64(out) {
   return btoa(bin);
 }
 async function blobToWavBase64(blob) {
-  const buf = await blob.arrayBuffer();
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const decoded = await ctx.decodeAudioData(buf);
-  ctx.close().catch(() => {});
-  const src = decoded.getChannelData(0);
-  const targetRate = 16000, ratio = decoded.sampleRate / targetRate;
-  const outLen = Math.floor(src.length / ratio);
-  const out = new Float32Array(outLen);
-  for (let i = 0; i < outLen; i++) out[i] = src[Math.min(src.length - 1, Math.floor(i * ratio))];
-  return pcmToWavBase64(out);
+  try {
+    const buf = await blob.arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const decoded = await ctx.decodeAudioData(buf);
+    ctx.close().catch(() => {});
+    const src = decoded.getChannelData(0);
+    const targetRate = 16000, ratio = decoded.sampleRate / targetRate;
+    const outLen = Math.floor(src.length / ratio);
+    const out = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) out[i] = src[Math.min(src.length - 1, Math.floor(i * ratio))];
+    return pcmToWavBase64(out);
+  } catch (e) {
+    // 解码失败（其他电脑浏览器对 MediaRecorder webm/mp4 解码支持差异）——明确报错不静默
+    setStage('❌ 音频解码失败'); setHint(`浏览器不支持解码 ${blob.type || '录音格式'}——请用最新版 Chrome/Edge`);
+    vlog('ERROR', 'DECODE', 'audio 解码失败', { type: blob.type, err: String(e).slice(0, 80) });
+    throw e;
+  }
 }
 
 // ---- SSE 流式对话 ----
