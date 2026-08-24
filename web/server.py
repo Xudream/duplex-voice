@@ -45,14 +45,12 @@ TTS_CACHE = WEB_DIR / "tts_cache"   # 本地 TTS 音频缓存（server 代下载
 
 
 def _load_key() -> str:
-    key = os.environ.get("DASHSCOPE_API_KEY", "")
-    if not key:
-        try:
-            cfg = json.loads((WEB_DIR.parent / "config.yaml").read_text(encoding="utf-8"))
-            key = cfg.get("model", {}).get("dashscope_api_key", "")
-        except Exception:
-            pass
-    return key
+    # 只读配置（duplex-voice/config.yaml 的 model.dashscope_api_key）——不读环境变量（2026-08-24 用户要求）
+    try:
+        cfg = json.loads((WEB_DIR.parent / "config.yaml").read_text(encoding="utf-8"))
+        return cfg.get("model", {}).get("dashscope_api_key", "")
+    except Exception:
+        return ""
 
 
 KEY = _load_key()

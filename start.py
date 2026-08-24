@@ -34,10 +34,16 @@ def check_deps() -> None:
 
 
 def find_key() -> str | None:
-    """API key：环境变量（sk- 校验）→ ~/.zshrc / ~/.bashrc / ~/.bash_profile（macOS/Linux）。"""
-    k = os.environ.get("DASHSCOPE_API_KEY", "")
-    if k.startswith("sk-"):
-        return k
+    """API key：读 config.yaml（model.dashscope_api_key）——不读环境变量（2026-08-24 用户要求）。
+    不存在时从 ~/.zshrc 等提取并写入 config.yaml（迁移友好）。"""
+    cfg_path = ROOT / "config.yaml"
+    try:
+        import json as _json
+        k = _json.loads(cfg_path.read_text(encoding="utf-8")).get("model", {}).get("dashscope_api_key", "")
+        if k.startswith("sk-"):
+            return k
+    except Exception:
+        pass
     for rc in ("~/.zshrc", "~/.bashrc", "~/.bash_profile"):
         p = Path(os.path.expanduser(rc))
         if not p.exists():
@@ -46,6 +52,13 @@ def find_key() -> str | None:
             if line.startswith("export DASHSCOPE_API_KEY"):
                 m = re.search(r'=\s*"?\'?([A-Za-z0-9._-]+)"?\'?', line.strip())
                 if m and m.group(1).startswith("sk-"):
+                    import json as _json
+                    try:
+                        cfg_path.write_text(_json.dumps({"model": {"dashscope_api_key": m.group(1)}},
+                                                        ensure_ascii=False, indent=2), encoding="utf-8")
+                        print(f"  已从 {rc} 提取 key 写入 config.yaml（{m.group(1)[:4]}…）")
+                    except Exception:
+                        pass
                     return m.group(1)
     return None
 
@@ -76,7 +89,7 @@ def main() -> None:
 
     print("==> [4/4] 启动 server")
     env = dict(os.environ)
-    env["DASHSCOPE_API_KEY"] = key
+    # 不设 DASHSCOPE_API_KEY——server 读 config.yaml（2026-08-24 用户要求）
     env["SEMANTIC_VAD"] = args.vad
     print(f"启动：SEMANTIC_VAD={args.vad} → http://127.0.0.1:8787 （Ctrl+C 停止）")
     try:
