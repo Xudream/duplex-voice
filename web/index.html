@@ -803,7 +803,9 @@ let cfgJsonDirty = false;         // 预设 tab 手动改过 JSON
 const CFG_FIELDS = {
   models: [
     // 按模型分组（第 4 元素 = 组标题；渲染时输出 .cfg-sec 分隔）
-    ['server.host', 'Host（端点）', 'text', '🌐 调用端点', 'llm-5ienv5iasbci5bt7.cn-beijing.maas.aliyuncs.com 专属空间 / dashscope.aliyuncs.com 老公共端点'],
+    ['server.host', 'Host（端点）', 'select', '🌐 调用端点',
+     [{ v: 'llm-5ienv5iasbci5bt7.cn-beijing.maas.aliyuncs.com', l: '专属空间（llm-5ienv5iasbci5bt7.cn-beijing.maas）' },
+      { v: 'dashscope.aliyuncs.com', l: '老公共端点（dashscope.aliyuncs.com）' }]],
     ['server.asr.model', '模型', 'text', '🎙️ ASR（语音识别）'],
     ['server.asr.mode', '模式', 'select', '🎙️ ASR（语音识别）',
      [{ v: 'stream', l: '流式（fun-asr 实时出字）' }, { v: 'batch', l: '非流式（qwen3-asr-flash 整段）' }]],
@@ -952,18 +954,20 @@ function renderCfgTab(tab) {
   };
   // Host 切换联动（专属空间 ↔ dashscope.aliyuncs.com 老端点——模型名差异）：
   // 老端点 Fun-ASR 模型名 = fun-asr-realtime（不带 -2026-06-15 版本后缀——用户实测指出，已验证识别 ✅）
+  // ASR 全配置跟随（provider/model/mode/ws_endpoint/sample_rate/task）
   const hostSel = cfgBody.querySelector('[data-path="server.host"]');
   if (hostSel) hostSel.onchange = () => {
     collectCfgFromForm();
     const a = cfgState.server.asr;
     const h = cfgState.server.host || '';
-    if (h.includes('dashscope.aliyuncs.com')) {
-      if (a.mode === 'stream' && (!a.model || a.model === 'fun-asr-flash-2026-06-15'))
-        a.model = 'fun-asr-realtime';   // 老端点 Fun-ASR（实测识别 ✅）
-    } else {
-      if (a.mode === 'stream' && (!a.model || a.model === 'fun-asr-realtime'))
-        a.model = 'fun-asr-flash-2026-06-15';
-    }
+    const old = h.includes('dashscope.aliyuncs.com');
+    // ASR 全配置预设（端点相关项全部跟随）
+    a.provider = 'dashscope';
+    a.mode = 'stream';
+    a.ws_endpoint = 'api-ws';
+    a.sample_rate = 16000;
+    a.task = 'asr';
+    a.model = old ? 'fun-asr-realtime' : 'fun-asr-flash-2026-06-15';   // 老端点 Fun-ASR | 专属空间版本化名称
     renderCfgTab('models');
   };
 }
