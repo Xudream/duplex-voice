@@ -5,4 +5,3 @@ sessions.jsonl
 *.log
 .DS_Store
 tts_cache/
-config.yaml   # API key（不入库）
