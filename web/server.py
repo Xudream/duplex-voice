@@ -305,8 +305,10 @@ class OmniVadJudge(VadJudge):
         b64 = audio_b64 if "base64" in audio_b64 else f"data:audio/wav;base64,{audio_b64}"
         body = {
             "model": self.model,
-            "input": {"messages": [{"role": "user", "content": [
-                {"audio": b64}, {"text": user_ctx}]}]},
+            "input": {"messages": [
+                {"role": "system", "content": [{"text": system}]},   # 状态定义+JSON 输出要求（漏了会导致模型自由回答非 JSON——实测"用户正在说话。"解析失败回退 rule→noise 误判）
+                {"role": "user", "content": [{"audio": b64}, {"text": user_ctx}]}
+            ]},
             "parameters": {"temperature": 0.0, "max_tokens": 64},
         }
         try:
@@ -328,12 +330,18 @@ class OmniVadJudge(VadJudge):
 
 
 def _extract_state(content: str) -> str | None:
-    """从 Omni 输出提取 state（容忍 JSON 包裹/代码块/多余文本）。"""
+    """从 Omni 输出提取 state（容忍 JSON 包裹/代码块/多余文本/纯文本状态词）。"""
     import re
     m = re.search(r'"state"\s*:\s*"([a-z_]+)"', content)
-    if not m:
+    if m:
+        s = m.group(1)
+    else:
+        # 非 JSON 兜底：纯文本里的状态词（"状态是 complete"/"判断为 noise"——音频直判实测模型
+        # 偶发自由回答"用户正在说话"——含状态词可提取，不含则 None 走回退）
+        m2 = re.search(r'\b(complete|incomplete|backchannel|barge_in|tts_echo|reject|noise)\b', content)
+        s = m2.group(1) if m2 else None
+    if s is None:
         return None
-    s = m.group(1)
     valid = {VadState.COMPLETE, VadState.INCOMPLETE, VadState.BACKCHANNEL, VadState.BARGE_IN,
              VadState.NOISE, VadState.TTS_ECHO, VadState.REJECT}
     return s if s in valid else None
