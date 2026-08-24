@@ -1338,6 +1338,7 @@ async function sendAudio(b64) {
         metrics.llm_fast = d.latency_ms;
         fastStreamActive = true;   // 本轮有承接语 → 慢句必须等其播完（防重叠）
         if (!aiMsg) aiMsg = addMsg('ai', '');
+        if (latRow && latRow.parentNode !== aiMsg) aiMsg.appendChild(latRow);   // 时延行迁移到回复气泡（asr 阶段挂 user——AI 回复出现即迁——2026-08-24）
         metrics.fast = d.latency_ms;
         const fastLbl = d.provider === 'dashscope' ? `云端 ${d.model}` : `本地 ${d.model}`;
         aiHtml += `<span class="tag"><span class="fast-tag">⚡ 承接语</span> · ${escapeHtml(fastLbl)}</span><div class="fast-text">${escapeHtml(d.text)}</div>`;
@@ -1351,6 +1352,7 @@ async function sendAudio(b64) {
         break;
       case 'slow_delta':
         if (!aiMsg) aiMsg = addMsg('ai', '');
+        if (latRow && latRow.parentNode !== aiMsg) aiMsg.appendChild(latRow);   // 时延行迁移到回复气泡（慢直达无 fast 时——slow_delta 创建 AI 气泡即迁）
         aiHtml += escapeHtml(d.delta);
         aiMsg.innerHTML = aiHtml + '<span class="caret"></span>';
         $('main').scrollTop = $('main').scrollHeight;
