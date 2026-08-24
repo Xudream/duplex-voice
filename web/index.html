@@ -307,6 +307,7 @@ let playQueue = {};   // 句子音频队列（idx → Audio）
 let streamWaitIdx = null;   // 等待承接语播完的 playQueue 慢句 idx（防快慢重叠）
 let fastStreamActive = false;   // 本轮存在承接语（fast 事件/idx=0 已到）——慢句必须等其播完
 let metrics = {};     // 各阶段时延（asr_text/asr_final/silence/slow_first/tts_first/total）
+let latRow = null;   // 时延统计行（实时更新——声明在脚本头部：sendAudio 调用早于后部声明会 TDZ 崩溃——2026-08-24 修复）
 let turnId = 0;       // 对话轮次（metrics 归属校验：done 后残留播放链的 playNow 不得污染下一轮）
 let speechStartEpoch = 0, speechEndEpoch = 0;   // 人开始说话/判停确认的 epoch 毫秒
 let speechRealEndEpoch = 0;   // 人实际说完话的 epoch（最后一次语音帧——判停前；响应时延基准，含判停）
@@ -1492,7 +1493,6 @@ async function sendAudio(b64) {
     }
   }
   function fmt(ms) { return ms == null ? '-' : (ms = Math.round(ms), ms >= 1000 ? (ms/1000).toFixed(1) + 's' : ms + 'ms');}
-let latRow = null;   // 时延统计行（实时更新——有结果就显示，不等 done）
 function updateLatency() {
   if (!latRow) {
     latRow = document.createElement('span');
