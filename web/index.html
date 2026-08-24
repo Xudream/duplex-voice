@@ -950,8 +950,8 @@ function renderCfgTab(tab) {
     }
     renderCfgTab('models');
   };
-  // Host 切换联动（专属空间 ↔ dashscope.aliyuncs.com 老端点——模型差异）：
-  // 老端点无 fun-asr-flash（ModelNotFound 实测）→ ASR 流式切 paraformer-realtime-v2
+  // Host 切换联动（专属空间 ↔ dashscope.aliyuncs.com 老端点——模型名差异）：
+  // 老端点 Fun-ASR 模型名 = fun-asr-realtime（不带 -2026-06-15 版本后缀——用户实测指出，已验证识别 ✅）
   const hostSel = cfgBody.querySelector('[data-path="server.host"]');
   if (hostSel) hostSel.onchange = () => {
     collectCfgFromForm();
@@ -959,9 +959,9 @@ function renderCfgTab(tab) {
     const h = cfgState.server.host || '';
     if (h.includes('dashscope.aliyuncs.com')) {
       if (a.mode === 'stream' && (!a.model || a.model === 'fun-asr-flash-2026-06-15'))
-        a.model = 'paraformer-realtime-v2';   // 老端点流式 ASR（实测 task-started ✅）
+        a.model = 'fun-asr-realtime';   // 老端点 Fun-ASR（实测识别 ✅）
     } else {
-      if (a.mode === 'stream' && (!a.model || a.model === 'paraformer-realtime-v2'))
+      if (a.mode === 'stream' && (!a.model || a.model === 'fun-asr-realtime'))
         a.model = 'fun-asr-flash-2026-06-15';
     }
     renderCfgTab('models');
