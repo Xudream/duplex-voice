@@ -1319,6 +1319,7 @@ async function sendAudio(b64) {
         break;
       case 'asr':
         setStage('已识别');
+        if (metrics.asrFinalEpoch == null) metrics.asrFinalEpoch = Date.now();   // ASR 给文本时刻（TTS 时延起点——快融合=承接语/慢直达=慢句）
         metrics.asr = d.latency_ms;                       // ASR 处理时延（server 端）
         metrics.asr_proc = performance.now() - tSendStart;  // 请求发出→ASR 定稿（含上传，覆盖'看不见的时延'）
         metrics.asr_text = d.partial_first_ms;            // 人开始说话→出 ASR 文字（无 partial 时为 null）
@@ -1371,9 +1372,7 @@ async function sendAudio(b64) {
         aiMsg.innerHTML = aiHtml;
         setStage('🔊 播放回复…');
         (metrics.tts = metrics.tts || []).push(d.latency_ms);
-        // TTS 合成耗时：只取慢句（channel=slow/无 channel）——承接语 fast 缓存命中
-        // 常为 0（logs 实测 fast ms=0 dl=0），若被其赋值则显示恒 0（2026-08-23 修复）
-        if (metrics.tts_comp == null && d.channel !== 'fast') metrics.tts_comp = d.latency_ms - (d.dl_ms || 0);   // TTS 合成（纯合成 API，不含公网下载——下载单独显示）
+
         if (d.dl_ms != null) metrics.tts_dl = d.dl_ms;   // 公网下载时延（云端 URL → 本地缓存，抖动单独显示）
         if (metrics.tts_first == null) {
           metrics.tts_first = Date.now() - speechEndEpoch;  // 人说完话→首个音频就绪（端到端）
@@ -1389,6 +1388,7 @@ async function sendAudio(b64) {
           vlog('INFO', 'PLAY2', 'playNow 调用', { idx, ts: Date.now(), tts_play: metrics.tts_play, turn: metrics.turn, turnId, sendEndEpoch, speechEndEpoch });
           if (metrics.tts_play == null && metrics.turn === turnId) {
             metrics.tts_play = Date.now() - speechRealEndEpoch;   // 说完话→开始播放（用发送时快照，防全局被覆盖）
+            if (metrics.tts_comp == null && metrics.asrFinalEpoch) metrics.tts_comp = Date.now() - metrics.asrFinalEpoch;   // TTS 时延=ASR 文本→开始播（快融合=承接语/慢直达=慢句）
             vlog('INFO', 'PLAY', '首个音频播放', { idx, ts: Date.now(), speechEndEpoch, tts_play: metrics.tts_play });
           }
           return a.play().then(() => { isReplying = true; vlog('INFO', 'PLAY2', 'play() 成功', { idx, ts: Date.now() }); }).catch((e) => { isReplying = false; vlog('WARN', 'PLAY2', 'play() 失败', { idx, err: String(e).slice(0, 80) }); });
@@ -1437,6 +1437,7 @@ async function sendAudio(b64) {
         // 总计=说完话→开始播放（感知响应时延）；若 done 先于播放到达（承接语未播），
         // 用 done 时刻兜底，播放开始时 playNow 会更新 tts_play（见 tts_sentence 分支）
         if (metrics.tts_play == null) metrics.tts_play = Date.now() - speechRealEndEpoch;
+        if (metrics.tts_comp == null && metrics.asrFinalEpoch) metrics.tts_comp = Date.now() - metrics.asrFinalEpoch;   // TTS 时延兜底（done 近似）
         metrics.total = metrics.tts_play;
         vlog('INFO', 'EVT', 'done', { total_ms: d.total_ms, speech_end: speechEndEpoch, asr_proc: metrics.asr_proc, asr_text: metrics.asr_text, silence: metrics.silence, slow_first: metrics.slow_first, tts_comp: metrics.tts_comp, tts_play: metrics.tts_play });
         const lat = document.createElement('span');
