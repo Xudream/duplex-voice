@@ -994,6 +994,7 @@ cfgSave.onclick = async () => {
     if (!resp.ok || !d.ok) throw new Error(d.error || d.msg || 'HTTP ' + resp.status);
     // 热生效成功：应用 frontend 段（前端参数立即生效）
     applyFrontendConfig(d.frontend || {});
+    stopAllPlayback();   // 模式/参数切换 → 停止旧播放链（快慢融合↔慢直达切换时旧链残留致重叠——2026-08-24 用户实测）
     try { localStorage.setItem('voice_fe_config', JSON.stringify(d.frontend || {})); } catch (e) {}
     cfgMsgTxt(`✅ 已保存并热生效（asr=${d.models.asr} · slow=${d.models.slow}）`);
     vlog('INFO', 'CFG_SAVE', '配置保存', { models: d.models });
