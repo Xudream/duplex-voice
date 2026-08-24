@@ -1286,6 +1286,8 @@ function stopAllPlayback() {
 async function sendAudio(b64) {
   if (busy) return;   // 防重入（持续模式段与按住说话并发）
   busy = true; btn.disabled = true; btn.classList.add('thinking');
+  stopAllPlayback();   // 新轮无条件停旧播放（第一轮慢句 done 后仍在播——不停止则第二轮与残留混播重叠——2026-08-24 系统性定位）
+  isReplying = false;
   latRow = null;   // 新轮：时延行重建（实时更新）
   micIcon.textContent = '⏳'; setHint('');
   // b64 = 16k wav base64（持续模式直采组装 / 按住模式 blobToWavBase64 后传入）
