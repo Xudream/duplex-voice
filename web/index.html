@@ -930,6 +930,20 @@ function renderCfgTab(tab) {
   // provider 切换 → 立即重渲染（Base URL label 跟随 provider 变化）
   const provSel = cfgBody.querySelector('[data-path="server.fast_llm.provider"]');
   if (provSel) provSel.onchange = () => { collectCfgFromForm(); renderCfgTab('models'); };
+  // ASR 模式切换 → 联动模型/端点（stream → fun-asr 流式 + api-ws；batch → qwen3-asr-flash 整段）
+  const asrModeSel = cfgBody.querySelector('[data-path="server.asr.mode"]');
+  if (asrModeSel) asrModeSel.onchange = () => {
+    collectCfgFromForm();
+    const a = cfgState.server.asr;
+    if (a.mode === 'stream') {
+      if (!a.model || a.model === 'qwen3-asr-flash') a.model = 'fun-asr-flash-2026-06-15';
+      if (!a.ws_endpoint) a.ws_endpoint = 'api-ws';
+    } else {
+      if (!a.model || a.model === 'fun-asr-flash-2026-06-15') a.model = 'qwen3-asr-flash';
+      a.ws_endpoint = '';
+    }
+    renderCfgTab('models');
+  };
 }
 
 function collectCfgFromForm() {

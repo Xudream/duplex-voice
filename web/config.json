@@ -2,15 +2,16 @@
   "server": {
     "asr": {
       "provider": "dashscope",
-      "model": "qwen3-asr-flash",
+      "model": "fun-asr-flash-2026-06-15",
+      "mode": "stream",
       "ws_endpoint": "api-ws",
       "sample_rate": 16000,
       "task": "asr"
     },
     "fast_llm": {
-      "provider": "ollama",
-      "model": "qwen3.5:4b-mlx",
-      "base_url": "http://127.0.0.1:11434",
+      "provider": "dashscope",
+      "model": "qwen-turbo",
+      "base_url": "",
       "max_chars": 10,
       "prompt": "你是全双工语音助手的快速响应模块。用户说完话后，你只生成一句6-10 个字的简短的承接语（如'好的，正在为您处理'）。要求：口语化、有内容感、不提指令具体内容（防与慢回复重复）、不要标点符号。"
     },
@@ -42,6 +43,7 @@
       "silence_ms": 800,
       "vote_in": 7,
       "vote_exit": 5,
+      "vote_win": 10,
       "energy_ratio": 4,
       "energy_floor_frame": 0.005,
       "energy_floor_seg": 0.012,

@@ -63,7 +63,7 @@ CONFIG_PATH = WEB_DIR / "config.json"
 
 DEFAULT_CONFIG: dict = {
     "server": {
-        "asr": {"provider": "dashscope", "model": "qwen3-asr-flash",
+        "asr": {"provider": "dashscope", "model": "fun-asr-flash-2026-06-15",   # 默认流式模型（mode=stream 联动）
                 "mode": "stream",   # stream 流式（fun-asr，partial 实时）/ batch 非流式（qwen3-asr-flash 整段）
                 "ws_endpoint": "api-ws", "sample_rate": 16000, "task": "asr"},
         "fast_llm": {"provider": "ollama", "model": "qwen3.5:4b-mlx",
