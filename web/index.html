@@ -579,6 +579,15 @@ async function contLoop() {
         }
       }
     }
+    // busy 看门狗：busy 卡死 40s 强制恢复（stale 重入链/请求挂起时 endBusy 不会触发——
+    // 全局兜底——防'回复结束了还卡在聆听中'，2026-08-24 用户实测）
+    if (busy && busySince && Date.now() - busySince > 40000) {
+      vlog('WARN', 'VAD', 'busy 看门狗：40s 超时强制恢复');
+      busy = false; busySince = 0;
+      btn.disabled = false; btn.classList.remove('thinking');
+      micIcon.textContent = '🎤';
+      setStage('🎤 聆听中…（自动恢复）');
+    }
     // VAD 状态摘要（1s 一条——定位'一直聆听'问题：prob/rms/vote/energyOk 真实值）
     if (!contLastLogTs || Date.now() - contLastLogTs > 1000) {
       contLastLogTs = Date.now();
@@ -1293,6 +1302,8 @@ function stopAllPlayback() {
 async function sendAudio(b64) {
   if (busy && !isReplying) return;   // 防重入：busy 且非播放期（正常回复生成中——追问缓存走 pendingBusy）；播放期插话（isReplying）→ 打断优先——允许重入（全双工 2026-08-24——原 busy 无条件拦截→播放期插话丢弃→'识别中'假象）
   busy = true; btn.disabled = true; btn.classList.add('thinking');
+  busySince = Date.now();   // busy 看门狗起点（40s 强制恢复——防 stale 重入链卡死）
+  window._chatStale = false;   // 新请求自己的状态（防旧请求 stale 残留——busy 永久卡死链）
   if (window._chatAc) {
     window._chatStale = true;   // 标记旧请求为"被打断"——其 catch/finally 静默退出（不误报超时、不 endBusy 破坏新请求状态）
     window._chatAc.abort(); window._chatAc = null;   // 播放期插话打断：abort 旧 SSE 生成（server 断开自动停止——全双工打断 2026-08-24）
@@ -1565,7 +1576,7 @@ function updateLatency() {
   latRow.textContent = `⏱ 上传+ASR ${fmt(metrics.asr_proc)} · 定稿 ${fmt(metrics.asr_final)} · 判停 ${fmt(contJudgeMs || null)} · 语义VAD ${fmt(vadMode === 'omni' ? metrics.vad_judge : null)} · LLM快 ${fmt(metrics.llm_fast)} · LLM慢 ${fmt(metrics.llm_slow)} · TTS合成 ${fmt(metrics.tts_comp)}·公网下载 ${fmt(metrics.tts_dl)} · 响应(说完→开始播) ${fmt(metrics.total)}`;
   }
   function endBusy() {
-    busy = false; btn.disabled = false; btn.classList.remove('thinking');
+    busy = false; busySince = 0; btn.disabled = false; btn.classList.remove('thinking');
     micIcon.textContent = '🎤'; setHint('按住说话 · 松开识别');
   }
 }
