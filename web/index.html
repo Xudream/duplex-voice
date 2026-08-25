@@ -646,6 +646,7 @@ async function flushContSegment(skipRatioCheck) {
     // ⚠️ 2026-08-24 修复：isReplying（播放期插话）优先于 busy 缓存——
     // 原顺序 busy 先拦截→播放期插话被缓存等 done → '播放完才处理'（用户实测）
     pendingBusy = { pcm, ts: Date.now() };
+    setStage('🎤 聆听中…（回复生成中——说完会处理新指令）');   // 2026-08-24：busy 缓存必须恢复 stage——原停留'检测到语音'→用户感知'一直卡住'
     vlog('WARN', 'FLUSH', 'busy 期语音：缓存待回复完成后发送（不丢弃）', { frames: pcm.length, ms: Math.round(pcm.length / 16) });
     return;
   }
