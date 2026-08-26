@@ -542,6 +542,7 @@ async function contLoop() {
             // 超长段直接丢弃：环境音持续 15s 发出去会被 ASR 识别→回复→播放→再触发（循环）；
             // 用户正常指令 <15s，丢弃安全。冷却 10s 防环境音循环触发
             contPcm = []; contSegSpeech = 0; contSegTotal = 0;
+            window._interruptSend = false;   // 丢弃路径清打断标记（防残留误放行——2026-08-24）
             contCoolUntil = Date.now() + VAD_COOLDOWN_MS;
             vlog('WARN', 'FLUSH', '超长段丢弃（环境持续音）', { segFrames });
           } else {
@@ -558,6 +559,7 @@ async function contLoop() {
           if (vadBehavior().bargeIn === 'immediate') {
             vlog('INFO', 'VAD', '播放期语音 → 立即停播（rule 打断）');
             userInterrupting = true;
+            window._interruptSend = true;   // 打断意图标记：判停后发送绕过 busy 缓存（立即处理打断指令——2026-08-24 rule 立即停播配套）
             stopAllPlayback();
           } else if (!ttsDucked) {
             duckTts(true);
@@ -661,13 +663,16 @@ async function flushContSegment(skipRatioCheck) {
   pcm.set(contPcm.slice(contSegStart));   // slice（普通数组无 subarray，subarray 会 TypeError 静默失败）
   contPcm = []; contSegSpeech = 0; contSegTotal = 0;
   if (!contMode) return;
-  if (busy && !isReplying) {
+  if (busy && !isReplying && !window._interruptSend) {
     // busy（回复生成中）时段的真实语音段不静默丢弃——缓存，回复完成后
     // 作为新指令发送（用户等不及的追问/打断，如"快一点"）。已通过
     // 语音占比/能量/时长过滤（prob 0.94 的段=真实语音；回声段已被
     // isReplying 分支与回声过滤拦截）。多段覆盖保留最新（最近意图）。
     // ⚠️ 2026-08-24 修复：isReplying（播放期插话）优先于 busy 缓存——
     // 原顺序 busy 先拦截→播放期插话被缓存等 done → '播放完才处理'（用户实测）
+    // ⚠️ 2026-08-24 rule 立即停播配套：_interruptSend（打断标记）也不缓存——
+    // 立即发送（abort 旧 SSE——打断指令优先处理——原缓存→'回复生成中'提示→
+    // 用户实测'rule 打断显示回复生成中'）
     pendingBusy = { pcm, ts: Date.now() };
     setStage('🎤 聆听中…（回复生成中——说完会处理新指令）');   // 2026-08-24：busy 缓存必须恢复 stage——原停留'检测到语音'→用户感知'一直卡住'
     vlog('WARN', 'FLUSH', 'busy 期语音：缓存待回复完成后发送（不丢弃）', { frames: pcm.length, ms: Math.round(pcm.length / 16) });
