@@ -468,9 +468,10 @@ def _make_fast_llm():
     if FAST_PROVIDER == "openai":
         # 本地/内部 OpenAI 兼容端点——严格按用户验证过的调用方式（2026-08-26）：
         # requests 同步 + stream=False + NO_PROXY 直连 + Session-ID + 完整 /chat/completions URL
+        # model 传空字符串（用户参考代码 MODEL_NAME=""——本地服务端不校验/用默认模型）
         return LocalOpenAICompatProvider(
             base_url=FAST_BASE or "http://127.0.0.1:8000/v1",
-            api_key="", model=FAST_MODEL)
+            api_key="", model="")
     # 默认 ollama 本地（base_url 可配自定义端点）
     return OllamaFastProvider(base_url=FAST_BASE, model=FAST_MODEL)
 
