@@ -705,7 +705,11 @@ async function flushContSegment(skipRatioCheck) {
   }
   vlog('INFO', 'FLUSH', '发送段', { frames: pcm.length, ms: Math.round(pcm.length / 16) });
   setStage('🎤 识别中…'); setHint('持续聆听中…');
-  await sendAudio(pcmToWavBase64(pcm));
+  // ⚠️ 2026-08-26：omni（semantic）插话→ preservePlayback（不立即停播/不 abort 旧 SSE）——
+  // 播放中说话先发送，等 vad_state 语义确认：backchannel/附和声恢复音量继续播（不砍播放），
+  // complete/barge_in 才由 vad_state 分支停播接管（用户实测'omni 附和声打断播放'）。
+  const omniInterrupt = isReplying && vadBehavior().bargeIn === 'semantic';
+  await sendAudio(pcmToWavBase64(pcm), omniInterrupt ? { preservePlayback: true } : undefined);
 }
 function stopContMode() {
   contMode = false;
@@ -1354,7 +1358,11 @@ function stopAllPlayback() {
   streamStates = {}; streamFinished = {}; streamWaitIdx = null; fastStreamActive = false;
   isReplying = false;
 }
-async function sendAudio(b64) {
+async function sendAudio(b64, opts) {
+  // opts.preservePlayback（omni 插话）：保留旧播放等语义确认——不立即停播/不 abort 旧 SSE。
+  // omni 的打断决策是异步的（vad_state 语义判断），backchannel/附和声不该砍播放——
+  // 只有 vad_state 确认 complete/barge_in 才停播接管（2026-08-26 用户实测'附和声打断播放'）。
+  const preserve = !!(opts && opts.preservePlayback);
   // rule 打断发送标记（flushContSegment/surge 触发设置——绕过 busy）：
   // ⚠️ 2026-08-24 打断轮次内保持（不消费）——surge 碎片切段后用户继续说
   // （同一打断意图）不缓存——endBusy（done）时统一清（轮次结束）
@@ -1363,27 +1371,36 @@ async function sendAudio(b64) {
   busy = true; btn.disabled = true; btn.classList.add('thinking');
   busySince = Date.now();   // busy 看门狗起点（40s 强制恢复——防 stale 重入链卡死）
   window._chatStale = false;   // 新请求自己的状态（防旧请求 stale 残留——busy 永久卡死链）
-  if (window._chatAc) {
+  if (window._chatAc && !preserve) {
     window._chatStale = true;   // 标记旧请求为"被打断"——其 catch/finally 静默退出（不误报超时、不 endBusy 破坏新请求状态）
     window._chatAc.abort(); window._chatAc = null;   // 播放期插话打断：abort 旧 SSE 生成（server 断开自动停止——全双工打断 2026-08-24）
   }
-  stopAllPlayback();   // 新轮无条件停旧播放（第一轮慢句 done 后仍在播——不停止则第二轮与残留混播重叠——2026-08-24 系统性定位）
-  isReplying = false;
+  if (!preserve) {   // 非 omni 插话：新轮无条件停旧播放（第一轮慢句 done 后仍在播——不停止则第二轮与残留混播重叠——2026-08-24 系统性定位）
+    stopAllPlayback();
+    isReplying = false;
+  }
+  // preserve（omni 插话）：保留播放链（playQueue/streamStates）+ isReplying——等 vad_state 语义确认
   latRow = null;   // 新轮：时延行重建（实时更新）
   micIcon.textContent = '⏳'; setHint('');
   // b64 = 16k wav base64（持续模式直采组装 / 按住模式 blobToWavBase64 后传入）
-  vlog('INFO', 'SEND', '请求开始', { audioMs: Math.round(b64.length * 3 / 4 / 32) });
+  vlog('INFO', 'SEND', '请求开始', { audioMs: Math.round(b64.length * 3 / 4 / 32), preserve });
 
   setStage('<span class="spinner"></span>上传音频…');
   let userMsg = null, aiMsg = null, aiHtml = '';
-  metrics = { turn: ++turnId };   // 本轮新 metrics（done 后残留播放链写入的旧值不污染本轮）
-  userInterrupting = false; playBaseRms = 0; surgeSince = 0;   // 播放期停播标记/基线重置（新轮）
-  fastStreamActive = false;   // 承接语存在标记重置（新轮——fast 事件到达时置位）
+  let preserveQuiet = false;   // omni 插话确认非打断（backchannel）——静默退出本请求，旧播放保留
+  if (!preserve) {   // 新轮才重置 metrics/latRow（omni 插话判断期保留旧回复的 metrics/latRow——backchannel 时继续播不丢时延）
+    metrics = { turn: ++turnId };   // 本轮新 metrics（done 后残留播放链写入的旧值不污染本轮）
+    latRow = null;
+  }
+  if (!preserve) {   // omni 插话判断期保留旧播放状态（不重置打断标记/基线/承接语标记——防破坏旧播放链）
+    userInterrupting = false; playBaseRms = 0; surgeSince = 0;   // 播放期停播标记/基线重置（新轮）
+    fastStreamActive = false;   // 承接语存在标记重置（新轮——fast 事件到达时置位）
+  }
   sendEndEpoch = speechEndEpoch;   // 发送时刻"人说完"快照（全局——pumpStream/playNow 都能访问；speechEndEpoch 会被后续判停覆盖）
   tSendStart = performance.now();   // 请求发出时刻（上传+ASR 处理时延起点）
   // 超时保护：慢通道异常/网络卡死时 30s 强制恢复（防 busy 永久占用导致后续说话全被丢弃）
   const ac = new AbortController();
-  window._chatAc = ac;   // 全局保存——播放期插话 abort 旧生成（全双工打断）
+  if (!preserve) window._chatAc = ac;   // 全局保存——播放期插话 abort 旧生成（全双工打断）。preserve 时保留旧 _chatAc（旧 SSE），ac 仅局部供接管
   const timer = setTimeout(() => ac.abort(), 30000);
   try {
     const resp = await fetch('/api/chat', {
@@ -1410,7 +1427,9 @@ async function sendAudio(b64) {
         if (!line) continue;
         const d = JSON.parse(line.slice(5).trim());
         handleEvent(d);
+        if (preserveQuiet) break;   // omni 插话非打断：尽早退出（不再处理 error/done——旧播放保留）
       }
+      if (preserveQuiet) break;
     }
   } catch (e) {
     if (window._chatStale) {
@@ -1638,6 +1657,28 @@ async function sendAudio(b64) {
             `<span class="tag">🧠 语义VAD(${d.vad}): ${d.state}</span>`);
         }
         setStage('🧠 语义VAD(' + d.vad + '): ' + d.state);
+        // ⚠️ 2026-08-26：omni 插话（preserve=true，播放中说话不立即停播）——语义确认后再决策：
+        // complete/barge_in → 真实打断：abort 旧 SSE（接管为新轮）+ 停播（下方 existing 分支 isReplying=true 执行 stopAllPlayback）
+        // backchannel/noise/echo/reject/incomplete → 非打断：恢复音量继续播（旧播放保留），静默退出本请求
+        if (preserve && vadBehavior().bargeIn === 'semantic') {
+          if (d.state === 'complete' || d.state === 'barge_in') {
+            // 真实打断：abort 旧 SSE（正在生成的旧回复）+ 接管新轮
+            if (window._chatAc && window._chatAc !== ac) {
+              window._chatStale = true;
+              window._chatAc.abort();
+            }
+            window._chatAc = ac;
+            metrics = { turn: ++turnId };   // 真正打断轮次才重置 metrics/latRow/播放期状态
+            latRow = null;
+            userInterrupting = false; playBaseRms = 0; surgeSince = 0; fastStreamActive = false;
+            vlog('INFO', 'PLAY', 'omni 插话语义确认打断 → 接管新回复', { state: d.state });
+          } else {
+            // 非打断（backchannel/附和声等）：恢复音量继续播——不显示 error、静默退出
+            duckTts(false);
+            preserveQuiet = true;
+            vlog('INFO', 'PLAY', 'omni 插话确认非打断 → 恢复音量继续播（旧播放保留）', { state: d.state });
+          }
+        }
         // 播放中插话的打断决策（semantic 行为才在此打断——语义确认后执行）：
         // complete/barge_in → 停播接管；backchannel/noise/echo/reject → 恢复音量继续播（无感）
         // 2026-08-24：duck 后语义确认非打断 → 恢复音量（继续播——不打断）
@@ -1657,6 +1698,7 @@ async function sendAudio(b64) {
         }
         break;
       case 'error':
+        if (preserveQuiet) { break; }   // omni 插话非打断（backchannel）：不显示 error——旧播放已保留
         setStage('❌ ' + (d.msg || '错误'));
         setHint('请重试');
         break;
