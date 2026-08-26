@@ -503,6 +503,7 @@ async function contLoop() {
         if (Date.now() - surgeSince >= sc.surgeMs) {
           // 持续 ≥surgeMs → 真语音 → 停播（TTS 声消失，段干净→ASR 识别准）
           userInterrupting = true; surgeSince = 0;
+          window._interruptSend = true;   // ⚠️ 2026-08-24：surge 触发也要设打断标记——否则 cutOnSurge 切段/判停后 flushContSegment 被 busy 缓存（'回复生成中'——用户实测 speaker 场景）
           stopAllPlayback();
           vlog('INFO', 'VAD', `播放期持续${sc.surgeMs}ms→停播`, { base: +playBaseRms.toFixed(4), rms: +rms.toFixed(4), scene: sceneMode });
           if (sc.cutOnSurge) {
@@ -599,7 +600,7 @@ async function contLoop() {
     // 全局兜底——防'回复结束了还卡在聆听中'，2026-08-24 用户实测）
     if (busy && busySince && Date.now() - busySince > 40000) {
       vlog('WARN', 'VAD', 'busy 看门狗：40s 超时强制恢复');
-      busy = false; busySince = 0;
+      busy = false; busySince = 0; window._interruptSend = false;
       btn.disabled = false; btn.classList.remove('thinking');
       micIcon.textContent = '🎤';
       setStage('🎤 聆听中…（自动恢复）');
@@ -1342,8 +1343,10 @@ function stopAllPlayback() {
   isReplying = false;
 }
 async function sendAudio(b64) {
-  const isInterrupt = !!window._interruptSend;   // rule 打断发送（flushContSegment 标记——绕过 busy——stopAllPlayback 后 isReplying 已 false）
-  window._interruptSend = false;
+  // rule 打断发送标记（flushContSegment/surge 触发设置——绕过 busy）：
+  // ⚠️ 2026-08-24 打断轮次内保持（不消费）——surge 碎片切段后用户继续说
+  // （同一打断意图）不缓存——endBusy（done）时统一清（轮次结束）
+  const isInterrupt = !!window._interruptSend;
   if (busy && !isReplying && !isInterrupt) return;   // 防重入：busy 且非播放期（正常回复生成中——追问缓存走 pendingBusy）；播放期插话（isReplying）/rule 打断（isInterrupt）→ 允许重入（全双工 2026-08-24）
   busy = true; btn.disabled = true; btn.classList.add('thinking');
   busySince = Date.now();   // busy 看门狗起点（40s 强制恢复——防 stale 重入链卡死）
@@ -1657,7 +1660,8 @@ function updateLatency() {
   latRow.textContent = `⏱ 上传+ASR ${fmt(metrics.asr_proc)} · 定稿 ${fmt(metrics.asr_final)} · 判停 ${fmt(contJudgeMs || null)} · 语义VAD ${fmt(vadMode === 'omni' ? metrics.vad_judge : null)} · LLM快 ${fmt(metrics.llm_fast)} · LLM慢 ${fmt(metrics.llm_slow)} · TTS合成 ${fmt(metrics.tts_comp)}·公网下载 ${fmt(metrics.tts_dl)} · 响应(说完→开始播) ${fmt(metrics.total)}`;
   }
   function endBusy() {
-    busy = false; busySince = 0; btn.disabled = false; btn.classList.remove('thinking');
+    busy = false; busySince = 0; window._interruptSend = false;   // 打断轮次结束清标记（2026-08-24——防残留误放行）
+    btn.disabled = false; btn.classList.remove('thinking');
     micIcon.textContent = '🎤'; setHint('按住说话 · 松开识别');
   }
 }
