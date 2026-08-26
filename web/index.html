@@ -667,6 +667,7 @@ async function flushContSegment(skipRatioCheck) {
     } else {
       // 声学 VAD（rule 默认）：原 barge-in 行为——立即打断
       vlog('INFO', 'FLUSH', '插话打断播放（barge-in）', { frames: pcm.length });
+      window._interruptSend = true;   // 打断发送标记：sendAudio 绕过 busy 检查（rule 打断——2026-08-24 修复：原 stopAllPlayback 清 isReplying 后 sendAudio busy 拦截→丢弃）
       stopAllPlayback();
     }
   }
@@ -1300,7 +1301,9 @@ function stopAllPlayback() {
   isReplying = false;
 }
 async function sendAudio(b64) {
-  if (busy && !isReplying) return;   // 防重入：busy 且非播放期（正常回复生成中——追问缓存走 pendingBusy）；播放期插话（isReplying）→ 打断优先——允许重入（全双工 2026-08-24——原 busy 无条件拦截→播放期插话丢弃→'识别中'假象）
+  const isInterrupt = !!window._interruptSend;   // rule 打断发送（flushContSegment 标记——绕过 busy——stopAllPlayback 后 isReplying 已 false）
+  window._interruptSend = false;
+  if (busy && !isReplying && !isInterrupt) return;   // 防重入：busy 且非播放期（正常回复生成中——追问缓存走 pendingBusy）；播放期插话（isReplying）/rule 打断（isInterrupt）→ 允许重入（全双工 2026-08-24）
   busy = true; btn.disabled = true; btn.classList.add('thinking');
   busySince = Date.now();   // busy 看门狗起点（40s 强制恢复——防 stale 重入链卡死）
   window._chatStale = false;   // 新请求自己的状态（防旧请求 stale 残留——busy 永久卡死链）
