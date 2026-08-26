@@ -129,6 +129,90 @@ class OpenAICompatLLMProvider:
         await self._client.aclose()
 
 
+class LocalOpenAICompatProvider:
+    """本地 OpenAI 兼容端点（严格按用户验证过的调用方式，2026-08-26）。
+
+    用户参考代码（实测可用）：
+        os.environ['NO_PROXY'] = 'localhost,127.0.0.1,<内网IP>'
+        BASE_URL = "http://<ip>:8000/v1/chat/completions"   # 完整路径
+        headers  = {"Content-Type": "application/json", "Authorization": ..., "Session-ID": ""}
+        data     = {"model": ..., "messages": ..., "stream": False,
+                    "chat_template_kwargs": {"enable_thinking": False}}
+        response = requests.post(BASE_URL, headers=headers, json=data)
+
+    差异点（vs OpenAICompatLLMProvider）：① requests 同步库（async 内 to_thread 包装）
+    ② stream=False 非流式（本地服务端不支持/不响应流式——之前 stream=True 调用失败）
+    ③ NO_PROXY 环境变量绕过系统代理直连内网 ④ 完整 /chat/completions URL
+    """
+
+    def __init__(self, base_url: str, api_key: str = "", model: str = ""):
+        import os
+        import re as _re
+        # NO_PROXY：绕过系统代理直连内网（requests 读环境变量）
+        host = _re.sub(r"^https?://([^:/]+).*", r"\1", base_url)
+        existing = os.environ.get("NO_PROXY", "")
+        hosts = {h for h in existing.split(",") if h}
+        hosts.add("localhost")
+        hosts.add("127.0.0.1")
+        if host and host not in hosts:
+            hosts.add(host)
+        os.environ["NO_PROXY"] = ",".join(sorted(hosts))
+        # 兼容两种 base_url 形态：http://ip:8000/v1 或 http://ip:8000/v1/chat/completions
+        self.base_url = base_url.rstrip("/")
+        if not self.base_url.endswith("/chat/completions"):
+            self.base_url += "/chat/completions"
+        self.api_key = api_key
+        self.model = model
+
+    async def stream_chat(self, messages, *, temperature=0.3, max_tokens=1024, tools=None) -> AsyncIterator[Event]:
+        import requests
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+            "Session-ID": "",   # 本地服务端要求（用户参考代码）
+        }
+        data = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,   # 非流式（用户验证过的调用方式——本地服务端不支持流式）
+            "chat_template_kwargs": {"enable_thinking": False},   # 关思考链
+        }
+        if tools:
+            data["tools"] = tools
+        if max_tokens:
+            data["max_tokens"] = max_tokens
+        # 同步 requests 在 async 环境用 to_thread 包装（不阻塞事件循环）
+        resp = await asyncio.to_thread(
+            requests.post, self.base_url, headers=headers, json=data, timeout=120)
+        resp.raise_for_status()
+        # 非流式 JSON 响应
+        try:
+            obj = resp.json()
+            full = ""
+            choices = obj.get("choices") or []
+            if choices:
+                msg = choices[0].get("message") or {}
+                # 兼容部分服务端把 reasoning 也放进 content / 只有 reasoning_content
+                full = msg.get("content") or msg.get("reasoning_content") or ""
+                if not full and "content" in msg and msg["content"] is None:
+                    full = msg.get("reasoning_content", "")
+        except Exception:
+            # 非 JSON（如纯文本/SSE 残片）——按用户参考代码逐 chunk 拼接
+            full = ""
+            for chunk in resp.iter_content(chunk_size=None):
+                if chunk:
+                    full += chunk.decode("utf-8", errors="ignore").strip()
+        full = (full or "").strip()
+        if full:
+            yield Event(type="llm.first_token", domain="llm", payload={"channel": "fast"})
+            yield Event(type="llm.token", domain="llm", payload={"delta": full, "channel": "fast"})
+        yield Event(type="llm.complete", domain="llm",
+                    payload={"full_text": full, "channel": "fast"})
+
+    async def close(self) -> None:
+        pass
+
+
 # ================= 快慢融合（软件设计 v2.2 §2.5） =================
 
 class FusionPolicy:
