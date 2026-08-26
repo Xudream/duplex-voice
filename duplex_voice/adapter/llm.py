@@ -48,15 +48,19 @@ class OpenAICompatLLMProvider:
     """OpenAI 兼容流式（httpx-sse /chat/completions）。"""
 
     def __init__(self, base_url: str, api_key: str, model: str,
-                 use_chat_template_kwargs: bool = False):
+                 use_chat_template_kwargs: bool = False, trust_env: bool = True,
+                 extra_headers: dict | None = None):
         """use_chat_template_kwargs=True：关思考用 chat_template_kwargs 结构
-        （部分本地服务端/模板只认这个，顶层 enable_thinking 不生效——2026-08-26 用户提供结构）。"""
+        （部分本地服务端/模板只认这个，顶层 enable_thinking 不生效——2026-08-26 用户提供结构）。
+        trust_env=False：绕过系统代理直连（本地/内网端点——代理会连不通内网 IP，2026-08-26 实测）。
+        extra_headers：额外请求头（如 Session-ID——用户参考代码指定）。"""
         import httpx
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.use_chat_template_kwargs = use_chat_template_kwargs
-        self._client = httpx.AsyncClient(timeout=60)
+        self.extra_headers = extra_headers or {}
+        self._client = httpx.AsyncClient(timeout=60, trust_env=trust_env)
 
     async def stream_chat(self, messages, *, temperature=0.3, max_tokens=1024, tools=None) -> AsyncIterator[Event]:
         payload: dict = {
@@ -72,6 +76,7 @@ class OpenAICompatLLMProvider:
         if tools:
             payload["tools"] = tools
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        headers.update(self.extra_headers)   # 额外头（如 Session-ID——本地服务端可能要求）
         first = True
         acc = ""
         req = self._client.build_request("POST", f"{self.base_url}/chat/completions",
