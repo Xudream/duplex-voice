@@ -506,11 +506,13 @@ async function contLoop() {
           window._interruptSend = true;   // ⚠️ 2026-08-24：surge 触发也要设打断标记——否则 cutOnSurge 切段/判停后 flushContSegment 被 busy 缓存（'回复生成中'——用户实测 speaker 场景）
           stopAllPlayback();
           vlog('INFO', 'VAD', `播放期持续${sc.surgeMs}ms→停播`, { base: +playBaseRms.toFixed(4), rms: +rms.toFixed(4), scene: sceneMode });
-          if (sc.cutOnSurge) {
-            // speaker：主动切段（段含少量 TTS 尾音 → 跳占比过滤，server is_tts_echo 兜底）
-            flushContSegment(true);
-          }
-          // headset：cutOnSurge=false → 停播后靠静音判停 800ms 切段（无回声可正常判停）
+          // ⚠️ 2026-08-26 修复：surge 触发后【不再立即 flushContSegment】——
+          // 原 cutOnSurge 立即切段只取到 surge 时刻前 200-500ms 碎片，句子没说完
+          // 就被发走→触发新回复→用户后续语音又切第二段（一句话被切成多段，用户实测）。
+          // stopAllPlayback 后 TTS 回声消失，静音判停 800ms 可正常触发（日志铁证：
+          // 22.353 prob=0 → 22.905 判停成功）——让用户说完，静音判停切完整句。
+          // headset（cutOnSurge=false）同理：停播后靠静音判停 800ms 切段。
+          // 段起点已由 line 501 的 contSegStart=surge-preRoll 预置，静音判停时完整保留。
         }
       } else {
         surgeSince = 0;   // 突增结束（短促"嗯/对/喂"应声）→ 重置，不停播
