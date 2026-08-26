@@ -616,6 +616,11 @@ class ChatRequest(BaseModel):
     is_replying: bool = False    # 发送时刻 AI 是否正在播放回复（语义 VAD 判断 barge_in 的关键输入）
 
 
+class ChatTextRequest(BaseModel):
+    text: str                    # 用户输入文本（文字聊天——跳过 ASR/语义VAD，直接生成语音回复）
+    client_id: str = "default"   # 多轮会话标识（与语音共享会话历史）
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     """音频 → ASR → 快慢融合 LLM → TTS。SSE 流式返回阶段事件。"""
@@ -1002,6 +1007,251 @@ async def chat(req: ChatRequest):
             yield 'data: {"type":"done","total_ms":%d}\n\n' % total_ms
         except Exception as e:
             log.error("CHAT_ERR cid=%s err=%s\n%s", req.client_id, e, traceback.format_exc())
+            yield 'data: {"type":"error","msg":%s}\n\n' % json.dumps(str(e))
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/chat_text")
+async def chat_text(req: ChatTextRequest):
+    """文字聊天：用户发文字 → 快慢融合 LLM → TTS 语音回复。SSE 流式返回阶段事件。
+
+    与 /api/chat（语音）共享快慢融合 + TTS 生成逻辑，但跳过 ASR 与语义 VAD——
+    user_text 直接作为慢通道 LLM 输入，回复经 TTS 合成下发，前端播放。
+    会话历史与语音共享（同一 client_id 多轮上下文连贯）。
+    """
+    if not KEY:
+        return JSONResponse({"error": "DASHSCOPE_API_KEY 未配置"}, status_code=500)
+    user_text = (req.text or "").strip()
+    if not user_text:
+        return JSONResponse({"error": "text 为空"}, status_code=400)
+    cid = req.client_id
+
+    async def gen():
+        t_start = time.time()
+        try:
+            log.info("TXT_REQ cid=%s text=%r", cid, user_text[:60])
+            yield 'data: {"type":"stage","stage":"slow"}\n\n'
+            # 快慢融合生成 + TTS（复用 /api/chat 同款逻辑）——推入统一事件队列
+            slow_events: asyncio.Queue = asyncio.Queue()
+            import re as _re
+
+            async def run_slow():
+                """慢通道生成 + 句子级 TTS 并行合成；事件推入 slow_events。"""
+                try:
+                    history = HISTORIES.get(cid, [])[-10:]
+                    messages = [{"role": "system", "content": fusion.slow_system_prompt()}]
+                    messages += history
+                    messages.append({"role": "user", "content": user_text})
+                    t0 = time.time()
+                    buf = ""
+                    sidx = 0
+                    pending = {}
+                    tts_t0 = {}
+                    first_done = False
+                    tts_sem = asyncio.Semaphore(2)
+
+                    async def _synth(sub: str):
+                        async with tts_sem:
+                            return await asyncio.to_thread(_local_tts, sub)
+
+                    async def _slow_stream(sub: str, i: int, q):
+                        async with tts_sem:
+                            try:
+                                first_ms = await tts_stream.synth(
+                                    sub, lambda pcm, i=i: q.put_nowait(
+                                        ("audio_chunk", i, base64.b64encode(pcm).decode())))
+                                q.put_nowait(("audio_end", i, first_ms))
+                            except Exception as e:
+                                log.error("STREAM_TTS_ERR cid=%s slow idx=%d err=%s → 回退整段",
+                                          cid, i, str(e)[:80])
+                                try:
+                                    u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, sub)
+                                    q.put_nowait(("tts_sentence_fb", i, u, tts_ms, dl_ms))
+                                except Exception as e2:
+                                    log.error("TTS_FB_ERR cid=%s slow idx=%d err=%s",
+                                              cid, i, str(e2)[:80])
+
+                    def flush():
+                        nonlocal buf, sidx
+                        s = buf.strip()
+                        buf = ""
+                        if not s:
+                            return
+                        if sidx == 0:
+                            s = _strip_leading_filler(s)
+                            if not s.strip():
+                                return
+                        for sub in _split_clauses(s):
+                            sub = sub.strip()
+                            if not sub:
+                                continue
+                            i = sidx
+                            sidx += 1
+                            ts = time.time()
+                            if TTS_MODE["mode"] == "stream":
+                                pending[i] = asyncio.create_task(_slow_stream(sub, i, slow_events))
+                            else:
+                                pending[i] = asyncio.create_task(_synth(sub))
+                            tts_t0[i] = ts
+
+                    try:
+                        async for evt in slow_llm.stream_chat(messages):
+                            if evt.type == "llm.token":
+                                delta = evt.payload.get("delta", "")
+                                if not first_done:
+                                    first_done = True
+                                    slow_events.put_nowait(("slow_first", int((time.time() - t0) * 1000), None))
+                                slow_events.put_nowait(("slow_delta", delta))
+                                buf += delta
+                                if _re.search(r"[。！？；.!?;]$", delta):
+                                    flush()
+                        if buf.strip():
+                            flush()
+                    except Exception as e:
+                        print(f"[slow] 失败: {e}")
+                    for i in sorted(pending):
+                        try:
+                            r = await pending[i]
+                            if TTS_MODE["mode"] != "stream":
+                                u, tts_ms, dl_ms = r
+                                slow_events.put_nowait(("tts_sentence", i, u,
+                                                         int((time.time() - tts_t0[i]) * 1000), dl_ms))
+                        except Exception as e:
+                            log.error("TTS_ERR cid=%s sentence=%d err=%s", cid, i, e)
+                    slow_events.put_nowait(("slow_done",))
+                except Exception as e:
+                    log.error("SLOW_ERR cid=%s err=%s", cid, e)
+                    slow_events.put_nowait(("slow_error", str(e)))
+
+            slow_task = asyncio.create_task(run_slow())
+            # 快通道承接语（可插拔：direct 策略不启动）
+            fast_text = ""
+            fast_tts_url = None
+            if fusion.should_fast(user_text):
+                yield 'data: {"type":"stage","stage":"fast"}\n\n'
+                t0 = time.time()
+                try:
+                    fast_prompt = FusionPolicy.build_fast_prompt(user_text)
+                    acc = ""
+                    async for evt in fast_llm.stream_chat(fast_prompt):
+                        if evt.type == "llm.token":
+                            acc += evt.payload.get("delta", "")
+                    fast_text = acc.strip()
+                    LAST_REPLY[cid] = [fast_text]
+                    fast_ms = int((time.time() - t0) * 1000)
+                    log.info("FAST cid=%s text=%r ms=%d", cid, fast_text, fast_ms)
+                    yield 'data: {"type":"fast","text":%s,"latency_ms":%d,"provider":"%s","model":%s}\n\n' % (
+                        json.dumps(fast_text), fast_ms, FAST_PROVIDER, json.dumps(FAST_MODEL))
+                    if fast_text:
+                        t0 = time.time()
+                        if TTS_MODE["mode"] == "stream":
+                            async def _fast_stream(text, q):
+                                try:
+                                    first_ms = await tts_stream.synth(
+                                        text, lambda pcm: q.put_nowait(
+                                            ("audio_chunk", -1, base64.b64encode(pcm).decode())))
+                                    q.put_nowait(("audio_end", -1, first_ms))
+                                except Exception as e:
+                                    log.error("STREAM_TTS_ERR cid=%s fast err=%s → 回退整段",
+                                              cid, str(e)[:80])
+                                    try:
+                                        u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, text)
+                                        q.put_nowait(("tts_sentence_fb", -1, u, tts_ms, dl_ms))
+                                    except Exception as e2:
+                                        log.error("TTS_FB_ERR cid=%s fast err=%s",
+                                                  cid, str(e2)[:80])
+                                finally:
+                                    q.put_nowait(("fast_done",))
+
+                            fast_task = asyncio.create_task(_fast_stream(fast_text, slow_events))
+                            fast_tts_url = "stream"
+                        else:
+                            u, tts_ms, dl_ms = await asyncio.to_thread(_local_tts, fast_text)
+                            fast_tts_url = u
+                            fast_tts_ms = int((time.time() - t0) * 1000)
+                            log.info("TTS cid=%s idx=0 fast ms=%d dl_ms=%d", cid, fast_tts_ms, dl_ms)
+                            yield 'data: {"type":"tts_sentence","idx":0,"channel":"fast","url":%s,"latency_ms":%d,"dl_ms":%d}\n\n' % (json.dumps(u), fast_tts_ms, dl_ms)
+                except Exception as e:
+                    log.error("FAST_ERR cid=%s err=%s", cid, e)
+            # 消费慢通道事件（边生成边流式下发）
+            slow_text = ""
+            got_slow_tts = False
+            slow_done_evt = False
+            fast_done_evt = False
+            need_fast = fast_tts_url == "stream"
+            while True:
+                ev = await slow_events.get()
+                if ev[0] == "slow_first":
+                    _, sf_ms, sil_ms = ev
+                    log.info("SLOW_FIRST cid=%s latency_ms=%d", cid, sf_ms)
+                    yield 'data: {"type":"slow_first","latency_ms":%d,"silence_ms":null}\n\n' % sf_ms
+                elif ev[0] == "slow_delta":
+                    slow_text += ev[1]
+                    yield 'data: {"type":"slow_delta","delta":%s}\n\n' % json.dumps(ev[1])
+                elif ev[0] == "audio_chunk":
+                    got_slow_tts = True
+                    _, i, b64s = ev
+                    real_idx = i + (1 if fast_tts_url else 0)
+                    yield 'data: {"type":"audio_chunk","idx":%d,"b64":%s}\n\n' % (real_idx, json.dumps(b64s))
+                elif ev[0] == "audio_end":
+                    got_slow_tts = True
+                    _, i, first_ms = ev
+                    real_idx = i + (1 if fast_tts_url else 0)
+                    yield 'data: {"type":"audio_end","idx":%d,"first_ms":%s}\n\n' % (
+                        real_idx, json.dumps(first_ms) if first_ms is not None else "null")
+                elif ev[0] == "tts_sentence_fb":
+                    _, i, u, tts_ms, dl_ms = ev
+                    real_idx = i + (1 if fast_tts_url else 0)
+                    got_slow_tts = True
+                    yield 'data: {"type":"tts_sentence","idx":%d,"channel":"slow","url":%s,"latency_ms":%d,"dl_ms":%d}\n\n' % (real_idx, json.dumps(u), tts_ms, dl_ms)
+                elif ev[0] == "tts_sentence":
+                    got_slow_tts = True
+                    _, i, u, ms, dl_ms = ev
+                    real_idx = i + (1 if fast_tts_url else 0)
+                    log.info("TTS cid=%s idx=%d slow ms=%d dl_ms=%d", cid, real_idx, ms, dl_ms)
+                    yield 'data: {"type":"tts_sentence","idx":%d,"channel":"slow","url":%s,"latency_ms":%d,"dl_ms":%d}\n\n' % (real_idx, json.dumps(u), ms, dl_ms)
+                elif ev[0] == "slow_done":
+                    slow_done_evt = True
+                elif ev[0] == "slow_error":
+                    log.error("SLOW_DONE_ERR cid=%s err=%s", cid, str(ev[1])[:80])
+                    slow_done_evt = True
+                elif ev[0] == "fast_done":
+                    fast_done_evt = True
+                if slow_done_evt and (not need_fast or fast_done_evt):
+                    break
+            # 兜底：均无音频 → 整段合成
+            reply_for_tts = slow_text or fast_text
+            if slow_text:
+                last = LAST_REPLY.get(cid, [])
+                if fast_text not in last:
+                    last = [fast_text] if fast_text else []
+                LAST_REPLY[cid] = last + [slow_text]
+            if not fast_tts_url and not got_slow_tts and reply_for_tts:
+                try:
+                    t0 = time.time()
+                    u, _tts_ms, _dl_ms = _local_tts(reply_for_tts)
+                    tts_ms = int((time.time() - t0) * 1000)
+                    log.info("TTS cid=%s fallback ms=%d", cid, tts_ms)
+                    yield 'data: {"type":"tts_sentence","idx":0,"url":%s,"latency_ms":%d}\n\n' % (json.dumps(u), tts_ms)
+                except Exception as e:
+                    log.error("TTS_ERR cid=%s fallback err=%s", cid, e)
+            # 记入会话历史（与语音共享上下文）
+            reply_for_hist = slow_text or fast_text or ""
+            if user_text:
+                h = HISTORIES.setdefault(cid, [])
+                h.append({"role": "user", "content": user_text})
+                if reply_for_hist:
+                    h.append({"role": "assistant", "content": reply_for_hist})
+                HISTORIES[cid] = h[-MAX_HISTORY:]
+            total_ms = int((time.time() - t_start) * 1000)
+            log.info("TXT_DONE cid=%s total=%dms slow_text=%r hist=%d",
+                     cid, total_ms, slow_text[:40], len(HISTORIES.get(cid, [])))
+            yield 'data: {"type":"done","total_ms":%d}\n\n' % total_ms
+        except Exception as e:
+            log.error("TXT_CHAT_ERR cid=%s err=%s\n%s", cid, e, traceback.format_exc())
             yield 'data: {"type":"error","msg":%s}\n\n' % json.dumps(str(e))
 
     return StreamingResponse(gen(), media_type="text/event-stream",

@@ -123,6 +123,9 @@
 .cfg-btn:hover { background: #f3f4f6; }
 .cfg-hint { font-size: 11px; color: #9ca3af; margin-top: 2px; }
 .cfg-preset-ta { width: 100%; min-height: 180px; font-family: ui-monospace, monospace; font-size: 11px; padding: 8px; border: 1px solid #d1d5db; border-radius: 8px; }
+.txt-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; padding: 0 16px; }
+.txt-input { flex: 1; padding: 9px 12px; border: 1px solid #d1d5db; border-radius: 10px; font-size: 14px; outline: none; background: #fff; }
+.txt-input:focus { border-color: #1e2761; box-shadow: 0 0 0 2px rgba(30,39,97,.12); }
 </style>
 </head>
 <body>
@@ -155,6 +158,10 @@
     <button class="cont-btn" id="ttsBtn" disabled title="切换 TTS（stream 流式 / batch 整段）">🎵 TTS: …</button>
     <button class="cont-btn" id="sceneBtn" disabled title="切换收音场景（🎧 耳机近讲 / 🔊 扬声器外放——外放时播放期收音策略不同）">🎧 场景: …</button>
     <button class="cont-btn" id="cfgBtn" title="详细配置（模型/prompt/VAD 参数/场景）">⚙️ 配置</button>
+  </div>
+  <div class="txt-row">
+    <input type="text" id="txtInput" class="txt-input" placeholder="输入文字，回车发送（语音回复）" autocomplete="off" />
+    <button class="cont-btn" id="txtBtn" disabled>✉️ 发送</button>
   </div>
   <div class="vad-info" id="vadInfo"></div>
 </footer>
@@ -735,6 +742,7 @@ function stopContMode() {
 fetch('/api/health').then(r => r.json()).then(() => {
   $('connDot').classList.add('on'); $('connText').textContent = '已连接';
   btn.disabled = false; contBtn.disabled = false;
+  txtBtn.disabled = false;   // 文本聊天可用（文字→语音回复）
   // 语义 VAD 开关：获取当前模式并启用
   fetch('/api/vad_mode').then(r => r.json()).then(d => {
     vadMode = d.mode;
@@ -1727,6 +1735,117 @@ contBtn.addEventListener('click', toggleCont);
 btn.addEventListener('mouseleave', stopRecord);
 btn.addEventListener('touchstart', e => { e.preventDefault(); startRecord(); }, { passive: false });
 btn.addEventListener('touchend', e => { e.preventDefault(); stopRecord(); }, { passive: false });
+
+// ---- 文本聊天：用户发文字 → 助手语音回复（POST /api/chat_text） ----
+const txtInput = $('txtInput'), txtBtn = $('txtBtn');
+txtBtn.addEventListener('click', () => sendText(txtInput.value));
+txtInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendText(txtInput.value); });
+function sendText(raw) {
+  const text = (raw || '').trim();
+  if (!text) return;
+  txtInput.value = '';
+  addMsg('user', escapeHtml(text));   // 用户文字气泡
+  const aiMsg = addMsg('ai', '<span class="spinner"></span>生成中…');
+  let aiHtml = '';
+  const ac = new AbortController();
+  setStage('✉️ 文字→语音回复中…');
+  vlog('INFO', 'TXT', '文字聊天发送', { text });
+  fetch('/api/chat_text', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, client_id: clientId }),
+    signal: ac.signal,
+  }).then(r => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    (async () => {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const events = buf.split('\n\n'); buf = events.pop();
+        for (const ev of events) {
+          const line = ev.split('\n').find(l => l.startsWith('data:'));
+          if (!line) continue;
+          const d = JSON.parse(line.slice(5).trim());
+          handleTextEvent(d, aiMsg, () => aiHtml);
+        }
+      }
+    })().catch(e => { setStage('❌ 文字聊天失败: ' + e.message); });
+  }).catch(e => { setStage('❌ 文字聊天失败: ' + e.message); vlog('ERROR', 'TXT', '请求失败', { err: String(e).slice(0, 120) }); });
+
+  function handleTextEvent(d, aiMsg, getHtml) {
+    switch (d.type) {
+      case 'fast':
+        aiHtml = `<span class="tag"><span class="fast-tag">⚡ 承接语</span> · ${escapeHtml(d.model)}</span><div class="fast-text">${escapeHtml(d.text)}</div>`;
+        aiMsg.innerHTML = aiHtml;
+        break;
+      case 'slow_delta':
+        if (!getHtml().includes('慢回复')) aiHtml = (getHtml() || '') + '<div class="slow-text">';
+        aiMsg.innerHTML = (getHtml() || '') + escapeHtml(d.delta) + '</div>';
+        break;
+      case 'audio_chunk':
+        setStage('🔊 播放回复…');
+        if (!streamStates[d.idx]) streamStates[d.idx] = { chunks: [], done: false, playing: false, sources: [] };
+        streamStates[d.idx].chunks.push(b64ToPcm(d.b64));
+        if (d.idx >= 1 && (streamStates[-1] && streamStates[-1].playing)) {
+          if (streamWaitIdx == null) streamWaitIdx = d.idx;
+        } else {
+          pumpStream(d.idx);
+        }
+        break;
+      case 'audio_end':
+        if (streamStates[d.idx]) {
+          streamStates[d.idx].done = true;
+          if (!streamStates[d.idx].chunks.length) { if (streamWaitIdx === d.idx) streamWaitIdx = null; finishStream(d.idx); }
+        } else { streamFinished[d.idx] = true; }
+        break;
+      case 'tts_sentence':
+        setStage('🔊 播放回复…');
+        const idx = d.idx;
+        const a = new Audio(d.url);
+        a.preload = 'auto';
+        a.volume = sceneBehavior().ttsVolume || 1;
+        playQueue[idx] = a;
+        const prev = playQueue[idx - 1];
+        const playNow = () => a.play().then(() => { isReplying = true; }).catch(() => {});
+        if (idx === 0) {
+          a.addEventListener('ended', triggerStreamWait);
+          isReplying = true;
+          playNow();
+        } else if (!prev && (fastStreamActive || (streamStates[0] && streamStates[0].playing) || (streamStates[-1] && streamStates[-1].playing))) {
+          isReplying = true;
+          streamWaitIdx = idx;
+        } else if (!prev) {
+          isReplying = true;
+          playNow();
+        } else if (prev.ended || (prev.paused && prev.currentTime > 0)) {
+          isReplying = true;
+          playNow();
+        } else {
+          isReplying = true;
+          prev.addEventListener('ended', playNow, { once: true });
+        }
+        a.onended = () => {
+          const next = playQueue[idx + 1];
+          if (next && !next.ended && next.paused && next.currentTime === 0) next.play().catch(() => {});
+          const keys = Object.keys(playQueue).filter(k => playQueue[k]);
+          if (keys.length && keys.every(k => playQueue[k].ended)) isReplying = false;
+          if (idx === Object.keys(playQueue).length - 1) setStage('');
+        };
+        break;
+      case 'done':
+        setStage('');
+        setHint('按住说话 · 松开识别');
+        vlog('INFO', 'TXT', 'done', { total_ms: d.total_ms });
+        break;
+      case 'error':
+        setStage('❌ ' + (d.msg || '错误'));
+        break;
+    }
+  }
+}
 </script>
 </body>
 </html>
