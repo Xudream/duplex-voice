@@ -551,6 +551,19 @@ async function contLoop() {
       }
       if (!contVoice && contVoiceMs >= CONT_MIN_SPEECH_MS && Date.now() > contCoolUntil) {
         contVoice = true; contVoiceMs = 0;
+        // ⚠️ 2026-08-24 打断体验优化（用户方案）：
+        // 播放期检测到用户语音——rule：立即停播（不等判停——原'用户完全说完才打断'太慢）；
+        // omni：TTS 音量降低（duck）不打断——等语义确认 barge_in 再停播（backchannel/noise 恢复音量）
+        if (isReplying && !userInterrupting) {
+          if (vadBehavior().bargeIn === 'immediate') {
+            vlog('INFO', 'VAD', '播放期语音 → 立即停播（rule 打断）');
+            userInterrupting = true;
+            stopAllPlayback();
+          } else if (!ttsDucked) {
+            duckTts(true);
+            vlog('INFO', 'VAD', '播放期语音 → TTS 音量降低（omni——等语义确认）');
+          }
+        }
         contSegSpeech = 0; contSegTotal = 0;   // 语音确认起统计
         contSegStart = Math.max(0, contPcm.length - VAD_PRE_ROLL_FRAMES);   // 语音触发点前移（pre-roll）
         contVoiceSince = Date.now();
@@ -1200,9 +1213,26 @@ let actx = null;
 let streamStates = {};     // idx → {chunks:[], done, playing, sources:[]}
 let streamFinished = {};   // idx → bool（句播完标记，句间顺序用）
 function getAudioCtx() {
-  if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+  if (!actx) {
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    // 全局 duckGain：播放期检测到用户语音 → TTS 音量降低（0.3）→ 语义确认 barge_in 再停播
+    // （2026-08-24 用户方案：omni 模式先降音量不打断，确认要打断才停——打断体验优化）
+    window.__duckGain = actx.createGain();
+    window.__duckGain.gain.value = 1;
+    window.__duckGain.connect(actx.destination);
+  }
   if (actx.state === 'suspended') actx.resume();
   return actx;
+}
+let ttsDucked = false;   // 当前是否处于 duck 状态（播放期检测到用户语音）
+function duckTts(on) {
+  ttsDucked = on;
+  const dg = window.__duckGain;
+  if (dg) dg.gain.value = on ? 0.3 : 1.0;   // 流式（全局 duck——每源场景音量在各自 gain）
+  Object.values(playQueue).forEach(a => {   // 整段（HTMLAudioElement volume）
+    try { a.volume = on ? 0.3 : (sceneBehavior().ttsVolume || 1); } catch (e) {}
+  });
+  vlog('INFO', 'PLAY', 'TTS 音量 ' + (on ? '降低(0.3——检测到用户语音)' : '恢复'), {});
 }
 function b64ToPcm(b64) {
   const bin = atob(b64);
@@ -1227,11 +1257,12 @@ function pumpStream(idx) {
   src.buffer = buf;
   // 播放音量按场景（speaker 0.6 降——进 mic 的 TTS 声减小；headset 1.0）
   const vol = sceneBehavior().ttsVolume || 1;
+  // 统一 → duckGain（播放期用户语音 duck 控制——2026-08-24）
   if (vol !== 1) {
     const g = ctx.createGain(); g.gain.value = vol;
-    src.connect(g); g.connect(ctx.destination);
+    src.connect(g); g.connect(window.__duckGain);
   } else {
-    src.connect(ctx.destination);
+    src.connect(window.__duckGain);
   }
   if (metrics.tts_play == null && metrics.turn === turnId) {
     metrics.tts_play = Date.now() - speechRealEndEpoch;   // 说完→首个 PCM 块开始播放（流式响应）
@@ -1282,10 +1313,12 @@ function finishStream(idx) {
   triggerStreamWait();   // 流式承接语播完 → 接播慢句
   if (Object.keys(streamStates).every(i => streamFinished[i])) {
     isReplying = false;   // 全部流式句播完
+    duckTts(false);   // 自然播完恢复音量（防 duck 残留——2026-08-24）
     if (playQueue && Object.keys(playQueue).length === 0) setStage('');
   }
 }
 function stopAllPlayback() {
+  duckTts(false);   // 停播统一恢复音量（防 duck 残留——2026-08-24）
   // 新轮开始/打断：停止上一轮全部播放，清空队列
   // （防多轮音频重叠、onended 链错乱、isReplying 残留卡死）
   const stopped = Object.keys(playQueue);
@@ -1586,12 +1619,19 @@ async function sendAudio(b64) {
         }
         setStage('🧠 语义VAD(' + d.vad + '): ' + d.state);
         // 播放中插话的打断决策（semantic 行为才在此打断——语义确认后执行）：
-        // complete/barge_in → 停播接管；backchannel/noise/echo/reject → 继续播（无感）
+        // complete/barge_in → 停播接管；backchannel/noise/echo/reject → 恢复音量继续播（无感）
+        // 2026-08-24：duck 后语义确认非打断 → 恢复音量（继续播——不打断）
+        if (ttsDucked && vadBehavior().bargeIn === 'semantic'
+            && (d.state === 'backchannel' || d.state === 'noise' || d.state === 'tts_echo' || d.state === 'reject' || d.state === 'incomplete')) {
+          duckTts(false);
+          vlog('INFO', 'PLAY', '语义确认非打断 → 恢复音量继续播', { state: d.state });
+        }
         // immediate 行为（rule 默认）不在此打断——barge-in 已在 flushContSegment 立即执行
         if (vadBehavior().bargeIn === 'semantic'
             && (d.state === 'complete' || d.state === 'barge_in')) {
           if (isReplying) {
             vlog('INFO', 'PLAY', '语义确认打断', { state: d.state });
+            duckTts(false);   // 打断前恢复音量（stopAllPlayback 也兜底——2026-08-24）
             stopAllPlayback();
           }
         }
