@@ -47,19 +47,28 @@ class MockLLMProvider:
 class OpenAICompatLLMProvider:
     """OpenAI 兼容流式（httpx-sse /chat/completions）。"""
 
-    def __init__(self, base_url: str, api_key: str, model: str):
+    def __init__(self, base_url: str, api_key: str, model: str,
+                 use_chat_template_kwargs: bool = False):
+        """use_chat_template_kwargs=True：关思考用 chat_template_kwargs 结构
+        （部分本地服务端/模板只认这个，顶层 enable_thinking 不生效——2026-08-26 用户提供结构）。"""
         import httpx
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
+        self.use_chat_template_kwargs = use_chat_template_kwargs
         self._client = httpx.AsyncClient(timeout=60)
 
     async def stream_chat(self, messages, *, temperature=0.3, max_tokens=1024, tools=None) -> AsyncIterator[Event]:
         payload: dict = {
             "model": self.model, "messages": messages,
             "stream": True, "temperature": temperature, "max_tokens": max_tokens,
-            "enable_thinking": False,   # 禁思考链：dashscope.aliyuncs.com 老端点 qwen3.5-27b 默认思考（1138 块 reasoning_content 40s+）→ 1s 直接内容（2026-08-24 实测）
         }
+        if self.use_chat_template_kwargs:
+            # 本地 OpenAI 兼容服务端：chat_template_kwargs 结构关思考链
+            # （用户指定结构——部分服务端/模板不支持顶层 enable_thinking）
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
+        else:
+            payload["enable_thinking"] = False   # 禁思考链：dashscope.aliyuncs.com 老端点 qwen3.5-27b 默认思考（1138 块 reasoning_content 40s+）→ 1s 直接内容（2026-08-24 实测）
         if tools:
             payload["tools"] = tools
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}

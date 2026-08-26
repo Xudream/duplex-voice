@@ -466,9 +466,11 @@ def _make_fast_llm():
         return OpenAICompatLLMProvider(
             base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=FAST_MODEL)
     if FAST_PROVIDER == "openai":
-        # 本地/内部 OpenAI 兼容端点（/v1/chat/completions，enable_thinking=False 关思考）
+        # 本地/内部 OpenAI 兼容端点（/v1/chat/completions）——
+        # chat_template_kwargs 结构关思考（用户指定，2026-08-26）
         return OpenAICompatLLMProvider(
-            base_url=FAST_BASE or "http://127.0.0.1:8000/v1", api_key="", model=FAST_MODEL)
+            base_url=FAST_BASE or "http://127.0.0.1:8000/v1", api_key="", model=FAST_MODEL,
+            use_chat_template_kwargs=True)
     # 默认 ollama 本地（base_url 可配自定义端点）
     return OllamaFastProvider(base_url=FAST_BASE, model=FAST_MODEL)
 
