@@ -188,6 +188,7 @@ const micIcon = $('micIcon'), ripple = $('ripple'), waveCanvas = $('wave');
 const contBtn = $('contBtn'), vadBtn = $('vadBtn'), fusionBtn = $('fusionBtn'), ttsBtn = $('ttsBtn'), sceneBtn = $('sceneBtn');
 let vadMode = null;   // 当前语义 VAD 模式（rule | omni）
 let ttsMode = null;   // 当前 TTS 模式（stream | batch）
+let fusionMode = 'fastslow';   // 当前融合策略（fastslow 快慢融合 | direct 慢直达）——慢句先就绪时判断是否等快承接语（2026-08-24 快慢重叠修复）
 let sceneMode = localStorage.getItem('voice_scene') || 'headset';   // 收音场景（耳机近讲/扬声器外放）——localStorage 持久化
 
 // 收音场景行为注册表（可插拔——每场景独立完整参数，互不污染；切换时重置全部播放期状态）
@@ -707,6 +708,7 @@ fetch('/api/health').then(r => r.json()).then(() => {
   }).catch(() => { vadBtn.textContent = '🧠 VAD: -'; });
   // 回复融合开关：获取当前模式并启用（快慢融合 | 慢回复直达）
   fetch('/api/fusion_mode').then(r => r.json()).then(d => {
+    fusionMode = d.mode;   // 前端跟踪融合策略（慢句挂等快判断用）
     fusionBtn.textContent = '🎙 融合: ' + (d.mode === 'direct' ? '直达' : '快慢');
     fusionBtn.disabled = false;
   }).catch(() => { fusionBtn.textContent = '🎙 融合: -'; });
@@ -762,6 +764,7 @@ fusionBtn.addEventListener('click', async () => {
     fusionBtn.textContent = '🎙 融合: ' + (d.mode === 'direct' ? '直达' : '快慢');
     setStage('🎙 融合切换: ' + (d.mode === 'direct' ? '慢回复直达' : '快慢融合'));
     stopAllPlayback();   // 融合策略切换 → 停止旧播放链（快慢↔直达切换旧链残留致重叠——2026-08-24 用户实测）
+    fusionMode = d.mode;   // 同步（慢句挂等快判断用）
     vlog('INFO', 'FUSION', '切换', { mode: d.mode });
   } catch (e) {
     setStage('❌ 融合切换失败');
@@ -1431,6 +1434,19 @@ async function sendAudio(b64) {
         // 慢句流式块到达但承接语（idx=-1 流式）在播 → 挂等（块先缓存，承接语播完 triggerStreamWait 接播——防重叠 2026-08-24 老端点实测）
         if (d.idx >= 1 && (fastStreamActive || (streamStates[-1] && streamStates[-1].playing))) {
           if (streamWaitIdx == null) streamWaitIdx = d.idx;
+        } else if (d.idx >= 1 && fusionMode === 'fastslow' && !fastStreamActive) {
+          // ⚠️ 2026-08-24 修复：慢句流式先就绪（快还没到）——fastslow 预期有承接语——挂等快到达
+          // （原逻辑直接 pumpStream → 快后到直接播 → 快慢重叠——用户实测）
+          if (streamWaitIdx == null) streamWaitIdx = d.idx;
+          if (!streamStates[d.idx]._waitTimer) {
+            streamStates[d.idx]._waitTimer = setTimeout(() => {
+              if (streamWaitIdx === d.idx && !streamStates[d.idx].playing) {
+                vlog('WARN', 'PLAY', '快承接语 2s 未到 → 慢句流式直接播（兜底）', { idx: d.idx });
+                streamWaitIdx = null;
+                pumpStream(d.idx);
+              }
+            }, 2000);
+          }
         } else {
           pumpStream(d.idx);
         }
@@ -1496,6 +1512,23 @@ async function sendAudio(b64) {
           isReplying = true;
           streamWaitIdx = idx;
           vlog('INFO', 'PLAY', '慢句等承接语播完', { idx, ts: Date.now(), fast: fastStreamActive, st0: !!st0 });
+        } else if (!prev && fusionMode === 'fastslow') {
+          // ⚠️ 2026-08-24 修复：慢句先就绪（慢 LLM 首句快于快通道）——fastslow 模式预期有承接语——
+          // 挂等快到达（fast 事件 → 快播 → 播完 triggerStreamWait 接播）；2s 超时兜底（快失败/direct）
+          // 原逻辑直接播 → 快后到直接播/停慢句 → 快慢重叠（用户实测'快慢 TTS 还是会重叠'）
+          isReplying = true;
+          streamWaitIdx = idx;
+          vlog('INFO', 'PLAY', '慢句先就绪：等快承接语到达', { idx, ts: Date.now() });
+          if (!streamStates[idx]?._waitTimer && !playQueue[idx]?._waitTimer) {
+            const wt = setTimeout(() => {
+              if (streamWaitIdx === idx && !(playQueue[idx] && !playQueue[idx].paused) && !streamStates[idx]?.playing) {
+                vlog('WARN', 'PLAY', '快承接语 2s 未到 → 慢句直接播（兜底）', { idx });
+                streamWaitIdx = null;
+                playNow();
+              }
+            }, 2000);
+            (playQueue[idx] = playQueue[idx] || {}) ? (playQueue[idx]._waitTimer = wt) : null;
+          }
         } else if (!prev || prev.ended || (prev.paused && prev.currentTime > 0)) {
           isReplying = true;   // 有音频要播 → 回声抑制生效
           playNow();
