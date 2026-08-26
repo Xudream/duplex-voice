@@ -501,18 +501,28 @@ async function contLoop() {
           if (sc.cutOnSurge) contSegStart = Math.max(0, contPcm.length - sc.preRollMs);   // 段起点=突增点 - 场景 pre-roll
         }
         if (Date.now() - surgeSince >= sc.surgeMs) {
-          // 持续 ≥surgeMs → 真语音 → 停播（TTS 声消失，段干净→ASR 识别准）
+          // 持续 ≥surgeMs → 真语音。按 VAD 模式分流：
+          // rule（immediate）：立即停播（声学 VAD 原行为）——TTS 声消失，段干净→ASR 识别准
+          // omni（semantic）：只 duck 不停播——打断决策交给语义判断（vad_state 事件）：
+          //   backchannel/附和声不该砍播放；complete/barge_in 才由 vad_state 分支 stopAllPlayback。
+          //   ⚠️ 2026-08-26：原 surge 无条件 stopAllPlayback——在 omni 判断回来前就把播放
+          //   停了，附和后 vad_state 判 backchannel 恢复音量但播放已终止（用户实测'附和声打断'）。
           userInterrupting = true; surgeSince = 0;
-          window._interruptSend = true;   // ⚠️ 2026-08-24：surge 触发也要设打断标记——否则 cutOnSurge 切段/判停后 flushContSegment 被 busy 缓存（'回复生成中'——用户实测 speaker 场景）
-          stopAllPlayback();
-          vlog('INFO', 'VAD', `播放期持续${sc.surgeMs}ms→停播`, { base: +playBaseRms.toFixed(4), rms: +rms.toFixed(4), scene: sceneMode });
-          // ⚠️ 2026-08-26 修复：surge 触发后【不再立即 flushContSegment】——
-          // 原 cutOnSurge 立即切段只取到 surge 时刻前 200-500ms 碎片，句子没说完
-          // 就被发走→触发新回复→用户后续语音又切第二段（一句话被切成多段，用户实测）。
-          // stopAllPlayback 后 TTS 回声消失，静音判停 800ms 可正常触发（日志铁证：
-          // 22.353 prob=0 → 22.905 判停成功）——让用户说完，静音判停切完整句。
-          // headset（cutOnSurge=false）同理：停播后靠静音判停 800ms 切段。
-          // 段起点已由 line 501 的 contSegStart=surge-preRoll 预置，静音判停时完整保留。
+          if (vadBehavior().bargeIn === 'immediate') {
+            window._interruptSend = true;   // ⚠️ 2026-08-24：surge 触发也要设打断标记——否则 cutOnSurge 切段/判停后 flushContSegment 被 busy 缓存（'回复生成中'——用户实测 speaker 场景）
+            stopAllPlayback();
+            vlog('INFO', 'VAD', `播放期持续${sc.surgeMs}ms→停播`, { base: +playBaseRms.toFixed(4), rms: +rms.toFixed(4), scene: sceneMode });
+            // ⚠️ 2026-08-26 修复：surge 触发后【不再立即 flushContSegment】——
+            // 原 cutOnSurge 立即切段只取到 surge 时刻前 200-500ms 碎片，句子没说完
+            // 就被发走→触发新回复→用户后续语音又切第二段（一句话被切成多段，用户实测）。
+            // stopAllPlayback 后 TTS 回声消失，静音判停 800ms 可正常触发（日志铁证：
+            // 22.353 prob=0 → 22.905 判停成功）——让用户说完，静音判停切完整句。
+            // headset（cutOnSurge=false）同理：停播后靠静音判停 800ms 切段。
+            // 段起点已由 line 501 的 contSegStart=surge-preRoll 预置，静音判停时完整保留。
+          } else if (!ttsDucked) {
+            duckTts(true);
+            vlog('INFO', 'VAD', '播放期语音 → TTS 音量降低（omni——等语义确认，不砍播放）', { base: +playBaseRms.toFixed(4), rms: +rms.toFixed(4), scene: sceneMode });
+          }
         }
       } else {
         surgeSince = 0;   // 突增结束（短促"嗯/对/喂"应声）→ 重置，不停播
