@@ -123,9 +123,10 @@
 .cfg-btn:hover { background: #f3f4f6; }
 .cfg-hint { font-size: 11px; color: #9ca3af; margin-top: 2px; }
 .cfg-preset-ta { width: 100%; min-height: 180px; font-family: ui-monospace, monospace; font-size: 11px; padding: 8px; border: 1px solid #d1d5db; border-radius: 8px; }
-.txt-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; padding: 0 16px; }
-.txt-input { flex: 1; padding: 9px 12px; border: 1px solid #d1d5db; border-radius: 10px; font-size: 14px; outline: none; background: #fff; }
+.txt-row { display: flex; gap: 10px; align-items: center; margin-top: 10px; padding: 0 16px; }
+.txt-input { flex: 1; padding: 14px 16px; border: 1px solid #d1d5db; border-radius: 12px; font-size: 17px; outline: none; background: #fff; }
 .txt-input:focus { border-color: #1e2761; box-shadow: 0 0 0 2px rgba(30,39,97,.12); }
+#txtBtn { padding: 12px 20px; font-size: 15px; }
 </style>
 </head>
 <body>
@@ -1746,7 +1747,7 @@ function sendText(raw) {
   txtInput.value = '';
   addMsg('user', escapeHtml(text));   // 用户文字气泡
   const aiMsg = addMsg('ai', '<span class="spinner"></span>生成中…');
-  let aiHtml = '';
+  let aiHtml = '', fastHtml = '', slowText = '';   // fastHtml=承接语段；slowText=慢回复累积全文（2026-08-26）
   const ac = new AbortController();
   setStage('✉️ 文字→语音回复中…');
   vlog('INFO', 'TXT', '文字聊天发送', { text });
@@ -1778,12 +1779,16 @@ function sendText(raw) {
   function handleTextEvent(d, aiMsg, getHtml) {
     switch (d.type) {
       case 'fast':
-        aiHtml = `<span class="tag"><span class="fast-tag">⚡ 承接语</span> · ${escapeHtml(d.model)}</span><div class="fast-text">${escapeHtml(d.text)}</div>`;
+        fastHtml = `<span class="tag"><span class="fast-tag">⚡ 承接语</span> · ${escapeHtml(d.model)}</span><div class="fast-text">${escapeHtml(d.text)}</div>`;
+        aiHtml = fastHtml;
         aiMsg.innerHTML = aiHtml;
         break;
       case 'slow_delta':
-        if (!getHtml().includes('慢回复')) aiHtml = (getHtml() || '') + '<div class="slow-text">';
-        aiMsg.innerHTML = (getHtml() || '') + escapeHtml(d.delta) + '</div>';
+        // ⚠️ 累积拼接（2026-08-26 修复）：不能每帧用"固定前缀+当前delta"重写——
+        // 那会让之前的 delta 全丢、只显示最新一段。维护 slowText 累积全文再整体渲染。
+        slowText += d.delta;
+        aiHtml = (fastHtml || '') + '<div class="slow-text">' + escapeHtml(slowText) + '</div>';
+        aiMsg.innerHTML = aiHtml;
         break;
       case 'audio_chunk':
         setStage('🔊 播放回复…');
