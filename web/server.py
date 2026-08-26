@@ -448,10 +448,16 @@ asr_stream = FunASRStreamProvider(host=HOST, api_key=KEY, model=ASR_MODEL)   # �
 
 
 def _make_fast_llm():
-    """快 LLM 按 provider 实例化：ollama 本地 / dashscope 云端（OpenAI 兼容）——界面可配置。"""
+    """快 LLM 按 provider 实例化（界面可配置）：
+    ollama 本地（Ollama 原生 /api/chat）/ dashscope 云端（OpenAI 兼容）
+    / openai 本地（任意 OpenAI 兼容端点 /v1/chat/completions，如内部部署 qwen3.5-4B）。"""
     if FAST_PROVIDER == "dashscope":
         return OpenAICompatLLMProvider(
             base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=FAST_MODEL)
+    if FAST_PROVIDER == "openai":
+        # 本地/内部 OpenAI 兼容端点（/v1/chat/completions，enable_thinking=False 关思考）
+        return OpenAICompatLLMProvider(
+            base_url=FAST_BASE or "http://127.0.0.1:8000/v1", api_key="", model=FAST_MODEL)
     # 默认 ollama 本地（base_url 可配自定义端点）
     return OllamaFastProvider(base_url=FAST_BASE, model=FAST_MODEL)
 

@@ -871,10 +871,12 @@ const CFG_FIELDS = {
     ['server.asr.mode', '模式', 'select', '🎙️ ASR（语音识别）',
      [{ v: 'stream', l: '流式（fun-asr 实时出字）' }, { v: 'batch', l: '非流式（qwen3-asr-flash 整段）' }]],
     ['server.asr.ws_endpoint', 'WS 端点', 'text', '🎙️ ASR（语音识别）'],
-    ['server.fast_llm.provider', 'Provider', 'select', '⚡ 快 LLM（承接语）', ['ollama', 'dashscope']],
+    ['server.fast_llm.provider', 'Provider', 'select', '⚡ 快 LLM（承接语）',
+     [{ v: 'ollama', l: 'Ollama 本地' }, { v: 'dashscope', l: 'DashScope 云端' }, { v: 'openai', l: 'OpenAI 兼容本地端点' }]],
     ['server.fast_llm.model', '模型', 'text', '⚡ 快 LLM（承接语）'],
     ['server.fast_llm.base_url', () => (getPath(cfgState, 'server.fast_llm.provider') === 'dashscope'
-      ? 'Base URL（dashscope 云端，留空用默认端点）' : 'Base URL（ollama 本地地址）'), 'text', '⚡ 快 LLM（承接语）'],
+      ? 'Base URL（dashscope 云端，留空用默认端点）' : (getPath(cfgState, 'server.fast_llm.provider') === 'openai'
+      ? 'Base URL（OpenAI 兼容端点，如 http://10.90.114.77:8000/v1）' : 'Base URL（ollama 本地地址）')), 'text', '⚡ 快 LLM（承接语）'],
     ['server.fast_llm.max_chars', '承接语字数上限', 'number', '⚡ 快 LLM（承接语）'],
     ['server.slow_llm.model', '模型', 'text', '🐢 慢 LLM（云端深度回复）'],
     ['server.slow_llm.max_tokens', 'max_tokens', 'number', '🐢 慢 LLM（云端深度回复）'],
