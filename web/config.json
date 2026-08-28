@@ -38,6 +38,9 @@
       "voice": "Cherry",
       "sample_rate": 24000,
       "mode": "stream"
+    },
+    "auth": {
+      "required": false
     }
   },
   "frontend": {

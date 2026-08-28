@@ -30,12 +30,20 @@ import asyncio
 import base64
 import json
 import time
+from pathlib import Path
 
 from fastapi import WebSocket, WebSocketDisconnect
 
 import device_auth
 
-AUTH_REQUIRED = False   # 局域网部署默认免鉴权；公网部署 config.server.auth.required=true
+
+def _auth_required() -> bool:
+    """读 config.json server.auth.required（与 /api/config 热生效联动）。"""
+    try:
+        cfg = json.loads((Path(__file__).resolve().parent / "config.json").read_text(encoding="utf-8"))
+        return bool(cfg.get("server", {}).get("auth", {}).get("required", False))
+    except Exception:
+        return False
 
 
 async def stream_ws(websocket: WebSocket, server_module) -> None:
@@ -66,7 +74,7 @@ async def stream_ws(websocket: WebSocket, server_module) -> None:
             # ---- 鉴权（首条 hello）----
             if t == "hello":
                 token = msg.get("token", "")
-                if AUTH_REQUIRED:
+                if _auth_required():
                     did = device_auth.verify(token)
                     if not did:
                         await send({"type": "auth_error"})
