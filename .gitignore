@@ -7,3 +7,4 @@ sessions.jsonl
 tts_cache/
 
 web/devices.json
+web/config.json
