@@ -490,7 +490,7 @@ def _apply_config(cfg: dict) -> dict:
     """应用新配置（热生效，不重启）：更新模型变量 + prompt 注入 + 重建 Provider。"""
     global CFG, ASR_MODEL, FAST_MODEL, FAST_BASE, SLOW_MODEL, OMNI_MODEL
     global TTS_BATCH_MODEL, TTS_STREAM_MODEL, TTS_VOICE, TTS_SAMPLE_RATE
-    global asr, fast_llm, slow_llm, tts, tts_stream, vad_judge
+    global asr, asr_stream, fast_llm, slow_llm, tts, tts_stream, vad_judge
     global FAST_PROVIDER, ASR_MODE, HOST, VAD_JUDGE_MODE
     CFG = cfg
     s = cfg["server"]
