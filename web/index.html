@@ -190,6 +190,61 @@
 
 <script src="/vendor/ort.min.js"></script>
 <script>
+// ==================== 设备鉴权（公网部署） ====================
+// 所有 /api/* 请求自动带 X-Device-Token；401 时弹出注册框（一次配对，token 存 localStorage）。
+const _origFetch = window.fetch;
+window.fetch = function(url, opts = {}) {
+  opts.headers = opts.headers || {};
+  const token = localStorage.getItem('device_token');
+  if (token && typeof url === 'string' && url.startsWith('/api/')) {
+    if (opts.headers instanceof Headers) { opts.headers.set('X-Device-Token', token); }
+    else { opts.headers['X-Device-Token'] = token; }
+  }
+  return _origFetch(url, opts).then(resp => {
+    if (resp.status === 401 && typeof url === 'string' && url.includes('/api/device/register') === false) {
+      showDeviceAuthDialog();
+    }
+    return resp;
+  });
+};
+
+function showDeviceAuthDialog() {
+  if (document.getElementById('deviceAuthOverlay')) return;   // 已显示
+  const ov = document.createElement('div');
+  ov.id = 'deviceAuthOverlay';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML = `
+    <div style="background:#fff;border-radius:14px;padding:28px 30px;width:min(92vw,380px);box-shadow:0 12px 40px rgba(0,0,0,.3);font-family:-apple-system,sans-serif">
+      <div style="font-size:17px;font-weight:600;margin-bottom:6px">🔑 设备授权</div>
+      <div style="font-size:13px;color:#666;margin-bottom:16px">首次使用需注册设备。输入设备名（如"我的手机"）：</div>
+      <input id="deviceNameInput" placeholder="设备名" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;margin-bottom:14px"/>
+      <button id="deviceRegBtn" style="width:100%;padding:10px;background:#4a7dff;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">注册并连接</button>
+      <div id="deviceRegMsg" style="font-size:12px;color:#c00;margin-top:10px;min-height:16px"></div>
+    </div>`;
+  document.body.appendChild(ov);
+  document.getElementById('deviceRegBtn').onclick = async () => {
+    const name = (document.getElementById('deviceNameInput').value || '').trim() || 'web-device';
+    const msg = document.getElementById('deviceRegMsg');
+    try {
+      const r = await _origFetch('/api/device/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      const d = await r.json();
+      if (d.token) {
+        localStorage.setItem('device_token', d.token);
+        localStorage.setItem('device_id', d.device_id || '');
+        msg.style.color = '#2a2';
+        msg.textContent = '✅ 注册成功，即将刷新…';
+        setTimeout(() => location.reload(), 600);
+      } else {
+        msg.textContent = d.msg || d.error || '注册失败';
+      }
+    } catch (e) { msg.textContent = '网络错误: ' + e.message; }
+  };
+}
+
 const $ = id => document.getElementById(id);
 const btn = $('wakeBtn'), chat = $('chat'), stage = $('stage'), hint = $('hint');
 const micIcon = $('micIcon'), ripple = $('ripple'), waveCanvas = $('wave');

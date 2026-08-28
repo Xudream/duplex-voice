@@ -553,6 +553,42 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="语音助手 Web 页面", lifespan=lifespan)
 
 
+# ==================== HTTP 全局设备鉴权（公网部署） ====================
+# server.auth.required=true 时：除白名单外所有 /api/* 请求须带 X-Device-Token。
+# 白名单：注册/健康检查/页面静态资源。token 通过 POST /api/device/register 获取。
+AUTH_EXEMPT = {
+    "/api/health", "/api/device/register",
+    "/tts_cache", "/", "/index.html", "/favicon.ico",
+}
+
+
+@app.middleware("http")
+async def device_auth_middleware(request, call_next):
+    def _auth_required() -> bool:
+        try:
+            import json as _j
+            cfg = _j.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            return bool(cfg.get("server", {}).get("auth", {}).get("required", False))
+        except Exception:
+            return False
+
+    path = request.url.path
+    if (
+        _auth_required()
+        and path.startswith("/api/")
+        and path not in AUTH_EXEMPT
+        and not path.startswith("/tts_cache")
+    ):
+        token = request.headers.get("X-Device-Token", "")
+        import device_auth
+        if not token or device_auth.verify(token) is None:
+            return JSONResponse(
+                {"ok": False, "error": "unauthorized", "msg": "设备未授权：请先注册设备获取 token"},
+                status_code=401,
+            )
+    return await call_next(request)
+
+
 # ---- 配置 API（界面详细配置面板读写；模型/prompt 热生效，不重启）----
 @app.get("/api/config")
 async def get_config():
