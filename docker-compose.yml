@@ -1,0 +1,16 @@
+services:
+  server:
+    build: .
+    container_name: duplex-voice-server
+    restart: unless-stopped
+    ports:
+      - "8787:8787"          # 局域网直连；公网建议仅暴露 nginx 443
+    volumes:
+      - ./config.yaml:/app/config.yaml          # API key 挂载注入（不入镜像）
+      - tts-cache:/app/web/tts_cache            # TTS 合成缓存
+      - devices:/app/web/devices.json           # 设备注册库（bind file 用 volumes 项示意）
+    environment:
+      - TTS_STREAM=1
+
+volumes:
+  tts-cache:

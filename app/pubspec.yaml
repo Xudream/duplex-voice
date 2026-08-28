@@ -1,0 +1,21 @@
+name: duplex_voice_app
+description: duplex-voice App client (Android/iOS) - connects to Linux server
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_inappwebview: ^6.1.5      # P1: 嵌现有 web 页面（VAD/打断/时延面板零改动复用）
+  web_socket_channel: ^3.0.1        # P2: 原生音频直连 /api/stream
+  record: ^5.1.2                    # P2: 原生采集（含系统 AEC）
+  just_audio: ^0.9.40               # P2: 原生播放
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

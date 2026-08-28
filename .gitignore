@@ -5,3 +5,5 @@ sessions.jsonl
 *.log
 .DS_Store
 tts_cache/
+
+web/devices.json

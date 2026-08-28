@@ -27,7 +27,7 @@ log = logging.getLogger("voice")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -1365,6 +1365,55 @@ async def index():
 
 # 前端资源（onnxruntime-web + Silero v6 ONNX 模型）
 app.mount("/vendor", StaticFiles(directory=WEB_DIR / "vendor"), name="vendor")
+
+
+# ===================== App 客户端 + 服务端模式（feat/hermes-app-server） =====================
+# WS 双工通道（App 客户端）+ 设备注册（详见 web/ws_stream.py、web/device_auth.py）
+
+@app.post("/api/device/register")
+async def device_register(req: dict):
+    """App 设备注册：POST {"name":"my-phone"} → {"token":"dvt_...","device_id":"dev_..."}。
+    局域网内首次配对调用；token 只返回一次，App 端安全存储。"""
+    import device_auth
+    name = (req.get("name") or "device").strip()[:40]
+    return device_auth.register(name)
+
+
+@app.get("/api/devices")
+async def devices_list():
+    import device_auth
+    return {"devices": device_auth.list_devices()}
+
+
+@app.websocket("/api/stream")
+async def stream_endpoint(ws: WebSocket):
+    """App 双工通道：协议见 web/ws_stream.py 模块注释。"""
+    from ws_stream import stream_ws
+    import sys as _sys
+    _mod = _sys.modules[__name__]   # 本模块（server）作为业务实现传入
+    await stream_ws(ws, _mod)
+
+
+async def run_chat_text_events(client_id: str, text: str):
+    """chat_text 管道的 async generator（WS/内部复用）：yield dict 事件。
+
+    实现：调用 /api/chat_text 端点函数拿 SSE 流，逐行解析为 dict--
+    零逻辑复制，WS 客户端与 SSE 前端走完全相同的代码路径。
+    """
+    req = ChatTextRequest(text=text, client_id=client_id)
+    resp = await chat_text(req)
+    if not hasattr(resp, "body_iterator"):   # 错误 JSONResponse（key 未配置/文本空）
+        return
+    body = resp.body_iterator
+    async for chunk in body:
+        if isinstance(chunk, bytes):
+            chunk = chunk.decode("utf-8", errors="ignore")
+        for line in chunk.splitlines():
+            if line.startswith("data:"):
+                try:
+                    yield json.loads(line[5:].strip())
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":
