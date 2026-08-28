@@ -10,11 +10,15 @@ import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..audio import AudioCapture, AudioPlayer
 
 from ..adapter import ASRProvider, LLMProvider, TTSProvider
 from ..adapter.asr import FunASRStreamProvider
 from ..adapter.llm import FusionPolicy
-from ..audio import AudioCapture, AudioPlayer, PreRollBuffer
+from ..audio import PreRollBuffer
 from ..config import Config
 from ..events import (
     E_ASR_FINAL, E_ASR_TIMEOUT, E_LLM_COMPLETE, E_LLM_ERROR, E_LLM_FIRST_TOKEN, E_LLM_TOKEN,

@@ -13,7 +13,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # 依赖（纯 Python，无系统级编译）
-RUN pip install --no-cache-dir fastapi uvicorn websockets httpx httpx_sse numpy
+RUN pip install --no-cache-dir fastapi uvicorn websockets httpx httpx_sse numpy pyyaml
 
 # 代码（不含 config.yaml——key 通过挂载注入，不入镜像）
 COPY web/ /app/web/
