@@ -463,8 +463,11 @@ def _make_fast_llm():
     ollama 本地（Ollama 原生 /api/chat）/ dashscope 云端（OpenAI 兼容）
     / openai 本地（任意 OpenAI 兼容端点 /v1/chat/completions，如内部部署 qwen3.5-4B）。"""
     if FAST_PROVIDER == "dashscope":
+        # trust_env=False：绕过系统代理直连（macOS 系统代理指向 mihomo 7890，
+        # 代理未运行时 httpx 全走死代理 → All connection attempts failed，2026-08-26 实测）
         return OpenAICompatLLMProvider(
-            base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=FAST_MODEL)
+            base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=FAST_MODEL,
+            trust_env=False)
     if FAST_PROVIDER == "openai":
         # 本地/内部 OpenAI 兼容端点——严格按用户验证过的调用方式（2026-08-26）：
         # requests 同步 + stream=False + NO_PROXY 直连 + Session-ID + 完整 /chat/completions URL
@@ -478,7 +481,8 @@ def _make_fast_llm():
 
 fast_llm = _make_fast_llm()
 slow_llm = OpenAICompatLLMProvider(
-    base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=SLOW_MODEL)
+    base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=SLOW_MODEL,
+    trust_env=False)
 tts = Qwen3TTSProvider(host=HOST, api_key=KEY)
 
 
@@ -513,7 +517,8 @@ def _apply_config(cfg: dict) -> dict:
     asr_stream = FunASRStreamProvider(host=HOST, api_key=KEY, model=ASR_MODEL)   # 流式 ASR 也重建（host/model 切换即时生效——2026-08-24 补）
     fast_llm = _make_fast_llm()
     slow_llm = OpenAICompatLLMProvider(
-        base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=SLOW_MODEL)
+        base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=SLOW_MODEL,
+        trust_env=False)
     tts = Qwen3TTSProvider(host=HOST, api_key=KEY)
     tts_stream = Qwen3TTSStream(HOST, KEY)
     if VAD_JUDGE == "omni":
