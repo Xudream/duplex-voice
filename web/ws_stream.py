@@ -75,8 +75,11 @@ async def stream_ws(websocket: WebSocket, server_module) -> None:
             if t == "hello":
                 token = msg.get("token", "")
                 if _auth_required():
-                    did = device_auth.verify(token)
-                    if not did:
+                    # 登录会话 token（sess_，Web/App 主路径）或设备 token（dvt_，App 快速配对）
+                    ok = token.startswith("sess_") and server_module._session_valid(token)
+                    if not ok:
+                        ok = bool(device_auth.verify(token))
+                    if not ok:
                         await send({"type": "auth_error"})
                         await asyncio.sleep(1)
                         return
