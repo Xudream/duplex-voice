@@ -40,7 +40,9 @@
       "mode": "stream"
     },
     "auth": {
-      "required": false
+      "required": true,
+      "username": "admin",
+      "password_hash": "6c66b8ea258c30521136e18fa2d52c5c89e5452320c4998fc318dd29edbcc258"
     }
   },
   "frontend": {

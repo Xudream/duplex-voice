@@ -553,25 +553,86 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="语音助手 Web 页面", lifespan=lifespan)
 
 
-# ==================== HTTP 全局设备鉴权（公网部署） ====================
-# server.auth.required=true 时：除白名单外所有 /api/* 请求须带 X-Device-Token。
-# 白名单：注册/健康检查/页面静态资源。token 通过 POST /api/device/register 获取。
+# ==================== 登录鉴权（公网部署） ====================
+# server.auth.required=true 时：除白名单外所有 /api/* 请求须带会话 token
+# （X-Auth-Token 头，登录接口签发）。密码以 sha256 存 config.json server.auth.password_hash。
+# 白名单：登录/健康检查/页面静态资源。
+import hashlib as _hashlib
+import secrets as _secrets
+import threading as _threading
+
 AUTH_EXEMPT = {
-    "/api/health", "/api/device/register",
+    "/api/health", "/api/login",
     "/tts_cache", "/", "/index.html", "/favicon.ico",
 }
+_SESSIONS: dict[str, float] = {}      # token -> 过期时间戳
+_SESSIONS_LOCK = _threading.Lock()
+SESSION_TTL = 7 * 24 * 3600           # 7 天
+
+
+def _auth_cfg() -> dict:
+    try:
+        import json as _j
+        cfg = _j.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        return cfg.get("server", {}).get("auth", {}) or {}
+    except Exception:
+        return {}
+
+
+def _auth_required() -> bool:
+    return bool(_auth_cfg().get("required", False))
+
+
+def _login_ok(username: str, password: str) -> bool:
+    a = _auth_cfg()
+    u = a.get("username", "")
+    h = a.get("password_hash", "")
+    if not u or not h:
+        return False
+    return username == u and _hashlib.sha256(password.encode()).hexdigest() == h
+
+
+def _session_valid(token: str) -> bool:
+    if not token:
+        return False
+    with _SESSIONS_LOCK:
+        exp = _SESSIONS.get(token)
+        if exp is None:
+            return False
+        if exp < time.time():
+            _SESSIONS.pop(token, None)
+            return False
+        return True
+
+
+@app.post("/api/login")
+async def api_login(body: dict):
+    """登录：POST {"username": "...", "password": "..."} → {"token": "...", "expires": ...}"""
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    if not _login_ok(username, password):
+        return JSONResponse({"ok": False, "error": "invalid_credentials", "msg": "用户名或密码错误"}, status_code=401)
+    token = "sess_" + _secrets.token_urlsafe(24)
+    with _SESSIONS_LOCK:
+        # 踢掉同用户旧会话（防多端共用）
+        now = time.time()
+        for t, exp in list(_SESSIONS.items()):
+            if exp < now:
+                _SESSIONS.pop(t, None)
+        _SESSIONS[token] = now + SESSION_TTL
+    return {"ok": True, "token": token, "expires": _SESSIONS[token]}
+
+
+@app.post("/api/logout")
+async def api_logout(body: dict):
+    token = (body.get("token") or "").strip()
+    with _SESSIONS_LOCK:
+        _SESSIONS.pop(token, None)
+    return {"ok": True}
 
 
 @app.middleware("http")
 async def device_auth_middleware(request, call_next):
-    def _auth_required() -> bool:
-        try:
-            import json as _j
-            cfg = _j.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            return bool(cfg.get("server", {}).get("auth", {}).get("required", False))
-        except Exception:
-            return False
-
     path = request.url.path
     if (
         _auth_required()
@@ -579,11 +640,10 @@ async def device_auth_middleware(request, call_next):
         and path not in AUTH_EXEMPT
         and not path.startswith("/tts_cache")
     ):
-        token = request.headers.get("X-Device-Token", "")
-        import device_auth
-        if not token or device_auth.verify(token) is None:
+        token = request.headers.get("X-Auth-Token", "")
+        if not _session_valid(token):
             return JSONResponse(
-                {"ok": False, "error": "unauthorized", "msg": "设备未授权：请先注册设备获取 token"},
+                {"ok": False, "error": "unauthorized", "msg": "未登录或会话已过期，请先登录"},
                 status_code=401,
             )
     return await call_next(request)
