@@ -299,9 +299,10 @@ class OmniVadJudge(VadJudge):
             return await self._fallback.judge(text, history, last_replies)
 
     async def judge_audio(self, audio_b64: str, history: list[dict], last_replies=(),
-                          is_replying: bool = False) -> tuple[str, str]:
+                          is_replying: bool = False) -> tuple[str | None, str]:
         """音频直判：当前轮给音频（multimodal-generation），上下文给文本——不等 ASR 结果。
-        实验分支 feat/audio-vad-judge：与 ASR 并行启动，判断完成即决策（打断/噪声更早）。"""
+        实验分支 feat/audio-vad-judge：与 ASR 并行启动，判断完成即决策（打断/噪声更早）。
+        返回 (None, reason)：调用失败/解析失败——外层调用方用已识别的 ASR 文本做文本判断兜底。"""
         try:
             playing = "是" if is_replying else "否"
         except Exception:
@@ -331,12 +332,14 @@ class OmniVadJudge(VadJudge):
             state = _extract_state(out)
             if state is None:
                 log.warning("VADJUDGE cid=- omni-audio 输出无法解析: %r", out[:80])
-                return await self._fallback.judge("", history, last_replies)
+                return None, "audio_parse_fail"   # 外层文本判断兜底（用 merged_text，勿用空串）
             return state, out[:60]
         except Exception as e:
-            # 音频直判失败 → 回退 rule（确定性兜底——不阻塞流程）
-            log.warning("VADJUDGE cid=- omni-audio 调用失败(%s) → 回退 rule", str(e)[:80])
-            return await self._fallback.judge("", history, last_replies)
+            # 音频直判失败 → 返回 (None, reason)：让外层调用方按设计走"文本判断兜底"
+            # （用已识别的 merged_text——传空串会 _is_noise_text('')=True 误判 noise 丢用户指令，
+            #   2026-08-26 Bug 修复：原实现在内部吞异常 + 空串兜底 → 外层 L729/L736 兜底永远走不到）
+            log.warning("VADJUDGE cid=- omni-audio 调用失败(%s) → 文本判断兜底", str(e)[:80])
+            return None, f"audio_fail:{str(e)[:40]}"
 
 
 def _extract_state(content: str) -> str | None:
@@ -379,7 +382,7 @@ FUSION_MODE = {"mode": os.environ.get("FUSION_MODE", "fastslow")}   # fastslow |
 fusion: FusionStrategy = get_fusion_strategy(FUSION_MODE["mode"])   # 全局融合策略（可插拔）
 TTS_STREAM = os.environ.get("TTS_STREAM", "1") == "1"   # 启动默认（流式）
 TTS_MODE = {"mode": "stream" if TTS_STREAM else "batch"}   # 运行中可切换：stream=承接语流式+慢句整段并行 / batch=全整段
-tts_stream = Qwen3TTSStream(HOST, KEY)   # 流式 TTS 实例（每句一个 WS 会话）
+tts_stream = Qwen3TTSStream(HOST, KEY, model=TTS_STREAM_MODEL, voice=TTS_VOICE)   # 流式 TTS 实例（每句一个 WS 会话；voice/model 取配置——修复死配置）
 
 
 def _is_noise_text(text: str) -> bool:
@@ -394,15 +397,19 @@ def _is_noise_text(text: str) -> bool:
     return False
 
 
-def _local_tts(text: str, voice: str = "Cherry") -> tuple:
+def _local_tts(text: str, voice: str | None = None) -> tuple:
     """合成 TTS 并转本地缓存 → (本地 URL, 合成耗时ms, 公网下载耗时ms)。
 
     公网部分（DashScope 合成 API + 云端音频下载）单独计时——下载抖动
     会反映在'响应'里，需单独显示（前端 tts_sentence.dl_ms）。
     同文本同音色缓存命中时合成/下载均 0（无公网调用）。
+    voice 缺省取全局 TTS_VOICE（面板 server.tts.voice——修复死配置：原硬编码 Cherry）。
     """
     import hashlib
     import urllib.request as _urlreq
+    if voice is None:
+        voice = TTS_VOICE   # 面板配置音色（修复死配置：原硬编码 Cherry）
+    assert voice is not None
     name = hashlib.md5((text + voice).encode()).hexdigest()[:16] + ".wav"
     local = TTS_CACHE / name
     if local.exists():
@@ -483,7 +490,8 @@ fast_llm = _make_fast_llm()
 slow_llm = OpenAICompatLLMProvider(
     base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=SLOW_MODEL,
     trust_env=False)
-tts = Qwen3TTSProvider(host=HOST, api_key=KEY)
+# TTS 构造带 voice/model（面板 server.tts.voice/batch_model 真正生效——修复死配置）
+tts = Qwen3TTSProvider(host=HOST, api_key=KEY, model=TTS_BATCH_MODEL, voice=TTS_VOICE)
 
 
 def _apply_config(cfg: dict) -> dict:
@@ -519,8 +527,10 @@ def _apply_config(cfg: dict) -> dict:
     slow_llm = OpenAICompatLLMProvider(
         base_url=f"https://{HOST}/compatible-mode/v1", api_key=KEY, model=SLOW_MODEL,
         trust_env=False)
-    tts = Qwen3TTSProvider(host=HOST, api_key=KEY)
-    tts_stream = Qwen3TTSStream(HOST, KEY)
+    # TTS 构造带 voice/model（面板 server.tts.voice/batch_model/stream_model 真正生效——
+    # 修复死配置：原实现只读全局变量从不传给构造，永远用类默认 Cherry/默认模型）
+    tts = Qwen3TTSProvider(host=HOST, api_key=KEY, model=TTS_BATCH_MODEL, voice=TTS_VOICE)
+    tts_stream = Qwen3TTSStream(HOST, KEY, model=TTS_STREAM_MODEL, voice=TTS_VOICE)
     if VAD_JUDGE == "omni":
         vad_judge = OmniVadJudge(host=HOST, api_key=KEY, model=OMNI_MODEL, prompt=s["omni"]["prompt"])
     print(f"[config] 热生效: asr={ASR_MODEL} fast={FAST_MODEL} slow={SLOW_MODEL} "

@@ -18,7 +18,8 @@ _end = _SRC.index("def _strip_leading_filler")
 
 def _make_local_tts(tmp_path, tts_mock):
     # 函数内 import urllib.request 拿真实模块——用 monkeypatch 替换 urlopen
-    ns = {"tts": tts_mock, "TTS_CACHE": tmp_path / "tts_cache", "time": time}
+    ns = {"tts": tts_mock, "TTS_CACHE": tmp_path / "tts_cache", "time": time,
+          "TTS_VOICE": "Cherry"}   # 面板音色全局（修复后 _local_tts 缺省取它）
     exec(_SRC[_start:_end], ns)
     return ns["_local_tts"]
 
