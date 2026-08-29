@@ -103,8 +103,6 @@ class VoicePage extends StatefulWidget {
 }
 
 class _VoicePageState extends State<VoicePage> {
-  InAppWebViewController? _controller;
-
   @override
   Widget build(BuildContext context) => Scaffold(
         body: InAppWebView(
@@ -113,6 +111,10 @@ class _VoicePageState extends State<VoicePage> {
             mediaPlaybackRequiresUserGesture: false,   // 免点按自动播放 TTS
             allowsInlineMediaPlayback: true,
           ),
+          // 服务端为 IP 自签证书（Caddy tls internal）：放行，不弹系统证书错误页
+          onReceivedServerTrustAuthRequest: (controller, challenge) async =>
+              ServerTrustAuthResponse(
+                  action: ServerTrustAuthResponseAction.PROCEED),
           onPermissionRequest: (controller, request) async =>
               PermissionResponse(
                   resources: request.resources,
