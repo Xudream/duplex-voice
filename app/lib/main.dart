@@ -10,6 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'native_voice_page.dart';
+
 void main() => runApp(const DuplexVoiceApp());
 
 class DuplexVoiceApp extends StatelessWidget {
@@ -110,22 +112,45 @@ class VoicePage extends StatefulWidget {
 }
 
 class _VoicePageState extends State<VoicePage> {
+  bool _nativeMode = false;   // P2 原生音频模式（record+just_audio+WS 直连）
+
   @override
   Widget build(BuildContext context) => Scaffold(
-        body: InAppWebView(
-          initialUrlRequest: URLRequest(url: WebUri(widget.url)),
-          initialSettings: InAppWebViewSettings(
-            mediaPlaybackRequiresUserGesture: false,   // 免点按自动播放 TTS
-            allowsInlineMediaPlayback: true,
-          ),
-          // 服务端为 IP 自签证书（Caddy tls internal）：放行，不弹系统证书错误页
-          // onReceivedServerTrustAuthRequest: (controller, challenge) async =>
-          //     ServerTrustAuthResponse(
-          //         action: ServerTrustAuthResponseAction.PROCEED),
-          onPermissionRequest: (controller, request) async =>
-              PermissionResponse(
-                  resources: request.resources,
-                  action: PermissionResponseAction.GRANT),
+        appBar: AppBar(
+          title: const Text('语音助手'),
+          actions: [
+            // 模式切换：Web（P1 webview）/ 原生（P2 原生音频）
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: false, label: Text('Web', style: TextStyle(fontSize: 12))),
+                ButtonSegment(value: true, label: Text('原生', style: TextStyle(fontSize: 12))),
+              ],
+              selected: {_nativeMode},
+              onSelectionChanged: (s) => setState(() => _nativeMode = s.first),
+              style: const ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+            const SizedBox(width: 12),
+          ],
         ),
+        body: _nativeMode
+            ? NativeVoicePage(serverUrl: widget.url)
+            : InAppWebView(
+                initialUrlRequest: URLRequest(url: WebUri(widget.url)),
+                initialSettings: InAppWebViewSettings(
+                  mediaPlaybackRequiresUserGesture: false,   // 免点按自动播放 TTS
+                  allowsInlineMediaPlayback: true,
+                ),
+                // 服务端为 IP 自签证书（Caddy tls internal）：放行，不弹系统证书错误页
+                // onReceivedServerTrustAuthRequest: (controller, challenge) async =>
+                //     ServerTrustAuthResponse(
+                //         action: ServerTrustAuthResponseAction.PROCEED),
+                onPermissionRequest: (controller, request) async =>
+                    PermissionResponse(
+                        resources: request.resources,
+                        action: PermissionResponseAction.GRANT),
+              ),
       );
 }

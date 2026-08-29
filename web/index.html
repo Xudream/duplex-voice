@@ -254,6 +254,13 @@ function showLoginPage() {
 
 // 启动时若已有 token，先探活：未过期直接进入；过期自动弹登录页
 (function() {
+  // 支持 URL ?token= 注入（App webview 模式从原生登录同步 token）
+  const urlToken = new URLSearchParams(location.search).get('token');
+  if (urlToken) {
+    localStorage.setItem('auth_token', urlToken);
+    // 去掉 URL 参数（避免 token 暴露在地址栏/日志）
+    history.replaceState({}, '', location.pathname + location.hash);
+  }
   const token = localStorage.getItem('auth_token');
   if (token) {
     _origFetch('/api/config', { headers: { 'X-Auth-Token': token } })
