@@ -40,7 +40,14 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() => serverUrl = prefs.getString('server_url'));
+    var url = prefs.getString('server_url');
+    // 默认地址：正式域名（有真实证书）；用户可改
+    if (url == null || url.isEmpty) {
+      url = 'https://nofishly.xyz';
+      await prefs.setString('server_url', url);
+    }
+    if (!mounted) return;
+    setState(() => serverUrl = url);
   }
 
   @override
@@ -112,9 +119,9 @@ class _VoicePageState extends State<VoicePage> {
             allowsInlineMediaPlayback: true,
           ),
           // 服务端为 IP 自签证书（Caddy tls internal）：放行，不弹系统证书错误页
-          onReceivedServerTrustAuthRequest: (controller, challenge) async =>
-              ServerTrustAuthResponse(
-                  action: ServerTrustAuthResponseAction.PROCEED),
+          // onReceivedServerTrustAuthRequest: (controller, challenge) async =>
+          //     ServerTrustAuthResponse(
+          //         action: ServerTrustAuthResponseAction.PROCEED),
           onPermissionRequest: (controller, request) async =>
               PermissionResponse(
                   resources: request.resources,
