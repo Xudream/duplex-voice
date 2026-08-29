@@ -10,7 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-Future<void> main() => runApp(const DuplexVoiceApp());
+void main() => runApp(const DuplexVoiceApp());
 
 class DuplexVoiceApp extends StatelessWidget {
   const DuplexVoiceApp({super.key});
@@ -112,12 +112,11 @@ class _VoicePageState extends State<VoicePage> {
           initialSettings: InAppWebViewSettings(
             mediaPlaybackRequiresUserGesture: false,   // 免点按自动播放 TTS
             allowsInlineMediaPlayback: true,
-            allowMicrophone: true,                     // iOS WKWebView 麦克风
           ),
           onPermissionRequest: (controller, request) async =>
-              PermissionRequestResponse(
+              PermissionResponse(
                   resources: request.resources,
-                  action: PermissionRequestResponseAction.GRANT),
+                  action: PermissionResponseAction.GRANT),
         ),
       );
 }
