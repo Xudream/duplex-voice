@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>L3 模型选型评测方法</title>
+<style>
+ body{margin:0;background:#f6f7f9;color:#101828;font-family:"PingFang SC",-apple-system,"Helvetica Neue",Arial,sans-serif;line-height:1.65}
+ main{max-width:1040px;margin:0 auto;padding:32px 28px 80px;background:#fff}
+ h1{font-size:26px;margin:8px 0 12px}
+ h2{font-size:20px;margin:34px 0 10px;padding-bottom:6px;border-bottom:2px solid #e4e7ec}
+ h3{font-size:15.5px;margin:22px 0 8px;color:#1d4ed8}
+ h4{font-size:13.5px;margin:16px 0 6px;color:#344054}
+ p{font-size:13.5px;margin:8px 0}
+ li{font-size:13.5px;margin:3px 0 3px 18px}
+ .quote{color:#475467;background:#f9fafb;border-left:3px solid #d0d5dd;padding:8px 12px;font-size:12.5px}
+ table{border-collapse:collapse;width:100%;margin:10px 0 16px;font-size:12.5px}
+ th,td{border:1px solid #e4e7ec;padding:6px 8px;text-align:left;vertical-align:top}
+ th{background:#f2f4f7;font-weight:600}
+ tr:nth-child(even) td{background:#fcfcfd}
+ pre{background:#0f172a;color:#e2e8f0;padding:12px 14px;border-radius:8px;overflow:auto;font-size:12px}
+ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+ figure{margin:14px 0 22px}
+ img{width:100%%;border:1px solid #e4e7ec;border-radius:10px;background:#fff}
+ figcaption{font-size:12px;color:#667085;text-align:center;margin-top:6px}
+ hr{border:none;border-top:1px solid #e4e7ec;margin:26px 0}
+</style></head><body><main>
+<h1>L3 模型选型评测方法：多评测集组合与决策规则</h1>
+
+<p class='quote'>版本 v1.0　·　2026-10-25　·　适用对象：L3 小脑（Talker LLM）选型与版本迭代验收</p>
+<p class='quote'>与《四层架构方案》§4.6 配套：那份文档定义了&quot;要测什么&quot;，本文定义&quot;用哪些集、怎么合成一个结论&quot;。</p>
+<p class='quote'>口径约定：【官方】取自论文或官方页；【实测】为项目内真实调用；【估算】为工程推算，须实测替换。</p>
+
+<hr>
+
+<h2>1. 适用范围与结论</h2>
+
+<h3>1.1 适用场景</h3>
+
+<table><tr><th>场景</th><th>是否适用</th><th>说明</th></tr><tr><td>首次选型（9B / 4B / 云端对照）</td><td>适用</td><td>全套流程</td></tr><tr><td>换量化版本（BF16 → AWQ 4bit）</td><td>适用</td><td>只需 A/C/E 三轴</td></tr><tr><td>LoRA 迭代验收</td><td>适用</td><td>需固定基座与量化，只变权重</td></tr><tr><td>换模型家族（Qwen → 其他）</td><td>适用</td><td>需重跑全套，公开集权重可上调</td></tr><tr><td>端到端系统评测</td><td>不适用</td><td>那是 L1–L4 联调，另立基准</td></tr></table>
+
+<h3>1.2 三条结论</h3>
+
+<li><strong>没有任何单一评测集能选 L3</strong>：L3 的任务是&quot;给定素材、按约束说人话&quot;，公开榜单考的是问答正确性与写作质量，形态错配。</li>
+<li><strong>多评测集组合成立，但要按&quot;轴&quot;组合，不能按&quot;数量&quot;堆</strong>：同一轴放三个集会隐式把该轴权重乘三，最后选出&quot;单项极强、整体失衡&quot;的模型。</li>
+<li><strong>公开集只能证明&quot;不行&quot;，自建集才能证明&quot;行&quot;</strong>：公开集提供横向可比性，自建集提供与线上分布贴合度，缺一不可。</li>
+
+<h3>1.3 与四层架构方案的关系</h3>
+
+<table><tr><th>文档</th><th>定义</th><th>位置</th></tr><tr><td>四层架构方案 §4.6</td><td>指标清单与目标值</td><td><code>docs/四层架构方案.md</code></td></tr><tr><td>本文</td><td>评测集组合、合成打分、决策规则</td><td><code>docs/L3模型选型评测方法.md</code></td></tr><tr><td>后续 harness</td><td>suite 配置 + runner + 汇总脚本</td><td>待建（见 §8.3）</td></tr></table>
+
+<hr>
+
+<h2>2. 为什么不能只用单一评测集</h2>
+
+<h3>2.1 任务形态错配</h3>
+
+<table><tr><th>维度</th><th>L3 的实际任务</th><th>公开榜单考的</th></tr><tr><td>输入</td><td>指令 + 已给定的素材（结论句、字段）</td><td>开放问题，模型自己找事实</td></tr><tr><td>输出</td><td>8–30 字口语，首句 ≤15 字</td><td>长文、代码、推理链</td></tr><tr><td>评判</td><td>数字原样、不评价、不重复、不越界</td><td>内容正确性、写作质量</td></tr><tr><td>语言</td><td>中文口语（语气词、省略、断句）</td><td>以英文为主</td></tr><tr><td>精度</td><td><strong>AWQ 4bit 部署版</strong></td><td>BF16 原版</td></tr></table>
+
+<p>五个维度全部错配，所以&quot;榜单第一&quot;对 L3 选型几乎无信息量。</p>
+
+<h3>2.2 同轴重复计权的陷阱</h3>
+
+<p>假设工具轴放了 BFCL、τ²-bench、自建工具集三个集，转述轴只有一个自建集：</p>
+
+<pre><code>名义权重：工具 30%  转述 30%
+实际权重：工具 (30/2 + 30/2 + 30/2) 被放大，转述被相对稀释
+结果：选出工具最强、转述最差的模型，而转述才是用户感知最强的能力</code></pre>
+
+<p>规则：<strong>每个轴最多两个集（1 个公开 + 1 个自建），轴内先合成再参与轴间加权。</strong></p>
+
+<h3>2.3 公开集与自建集的分工</h3>
+
+<table><tr><th>角色</th><th>谁承担</th><th>能回答的问题</th><th>不能回答的问题</th></tr><tr><td>淘汰赛</td><td>公开集</td><td>这个模型是不是明显不行</td><td>它在我们场景里行不行</td></tr><tr><td>排位赛</td><td>自建集</td><td>谁更适合我们的分布</td><td>它能不能扛更大的任务</td></tr><tr><td>诊断</td><td>错误归因类集</td><td>错在选工具、漏参还是格式</td><td>错了会不会被用户感知</td></tr></table>
+
+<hr>
+
+<h2>3. 评测集组合（suite）</h2>
+
+<h3>3.1 六轴十四集总表</h3>
+
+<table><tr><th>轴</th><th>评测集</th><th>覆盖什么</th><th>角色</th><th>类型</th><th>判分</th></tr><tr><td>A 工具调用</td><td>BFCL v4（simple / multiple / parallel / 多轮 / agentic 分层）</td><td>函数选择与参数填写</td><td>粗筛及格线</td><td>公开</td><td>自动</td></tr><tr><td>A 工具调用</td><td>PluginEval</td><td>函数调用错误归因（选错 / 漏参 / 格式）</td><td>诊断，不计分</td><td>公开</td><td>自动</td></tr><tr><td>A 工具调用</td><td>τ²-bench（retail / airline / telecom）</td><td>多轮工具编排与双控</td><td>仅多轮场景</td><td>公开</td><td>自动</td></tr><tr><td>A 工具调用</td><td><strong>自建工具集（中文口语）</strong></td><td>真实说法 → 工具与参数</td><td><strong>主判据</strong></td><td>自建</td><td>自动</td></tr><tr><td>B 约束遵循</td><td>IFEval</td><td>25 类可验证约束（字数/格式/禁用词）</td><td>格式与长度</td><td>公开</td><td>自动</td></tr><tr><td>B 约束遵循</td><td><strong>自建口语约束集</strong></td><td>首句 ≤15 字、禁 markdown、禁列表</td><td><strong>主判据</strong></td><td>自建</td><td>自动</td></tr><tr><td>C 忠实性</td><td>FActScore 思路</td><td>原子事实可归因</td><td>辅助</td><td>公开</td><td>半自动</td></tr><tr><td>C 忠实性</td><td>HaluEval 中文子集</td><td>幻觉识别</td><td>辅助</td><td>公开</td><td>judge</td></tr><tr><td>C 忠实性</td><td><strong>自建数字/专名保真集</strong></td><td>数字与专名原样搬运</td><td><strong>硬门槛</strong></td><td>自建</td><td>自动</td></tr><tr><td>D 口语质量</td><td>人工成对比较</td><td>自然度、口语感、节奏</td><td><strong>主判据</strong></td><td>自建</td><td>人工</td></tr><tr><td>D 口语质量</td><td>LLM-judge rubric</td><td>与人工校准后的批量打分</td><td>辅助</td><td>自建</td><td>judge</td></tr><tr><td>E 时延</td><td>首 token / 整句 P50·P95（单并发）</td><td>实时性</td><td>硬门槛</td><td>实测</td><td>自动</td></tr><tr><td>E 时延</td><td>并发 1/4/8 的 P95 + OOM 边界</td><td>容量</td><td>硬门槛</td><td>实测</td><td>自动</td></tr><tr><td>F 稳定性</td><td>同输入 5 次采样一致率、8k/32k 退化</td><td>抖动与长上下文</td><td>辅助</td><td>实测</td><td>自动</td></tr></table>
+
+<p class='quote'>公开集出处：BFCL v4 见 Gorilla 官方榜；IFEval 见 arXiv:2311.07911；τ²-bench 见 ICML 2026；</p>
+<p class='quote'>PluginEval 见 arXiv:2608.08700；FActScore / HaluEval 为公开可用基准（评分思路借用，中文需重写 rubric）。</p>
+
+<h3>3.2 每轴的选择依据</h3>
+
+<table><tr><th>轴</th><th>为什么必须有</th><th>为什么只用这几个</th></tr><tr><td>A 工具</td><td>L3 的本地闭环能力靠它</td><td>BFCL 覆盖标准切面，PluginEval 负责诊断，自建集负责真实中文说法；τ²-bench 只在需要多轮时启用</td></tr><tr><td>B 约束</td><td>音色与可听性依赖长度与格式</td><td>IFEval 是唯一成熟的可验证约束基准；口语长度约束它不覆盖，只能自建</td></tr><tr><td>C 忠实性</td><td>转述改数字是最高危错误</td><td>数字/专名可用字符串精确判，最可靠；FActScore/HaluEval 只做交叉验证</td></tr><tr><td>D 口语</td><td>公开集完全没有覆盖</td><td>只能用人工成对比较；judge 仅用于批量初筛</td></tr><tr><td>E 时延</td><td>硬约束，榜单不给</td><td>必须自己压测，且要测量化版本</td></tr><tr><td>F 稳定</td><td>抖动会放大成&quot;时好时坏&quot;</td><td>同输入重复采样成本低</td></tr></table>
+
+<h3>3.3 公开集的已知局限</h3>
+
+<table><tr><th>局限</th><th>表现</th><th>应对</th></tr><tr><td>语言错配</td><td>以英文为主，中文口语覆盖薄</td><td>中文场景提高自建集权重（70% : 30%）</td></tr><tr><td>精度错配</td><td>榜单多为 BF16</td><td>所有候选按部署量化（AWQ 4bit）重跑</td></tr><tr><td>提示错配</td><td>榜单用自己的 prompt 与 template</td><td>统一 prompt/template/约束解码，否则不可比</td></tr><tr><td>数据污染</td><td>部分题可能进过训练集</td><td>私有改写 held-out（见 §7.1）</td></tr><tr><td>难度错配</td><td>榜单题目超出/低于 L3 实际分布</td><td>只做淘汰，不做排位</td></tr></table>
+
+<h3>3.4 自建集的必要覆盖</h3>
+
+<table><tr><th>覆盖项</th><th>为什么必须自建</th><th>最小条数</th></tr><tr><td>承接语不越界</td><td>任何公开集都没有&quot;只许说状态&quot;的约束</td><td>40</td></tr><tr><td>数字/专名保真</td><td>需要精确比对而非语义相似</td><td>60</td></tr><tr><td>中文口语转述</td><td>口语省略、语气词、断句</td><td>60</td></tr><tr><td>空结果与超时</td><td>真实链路的必现分支</td><td>20</td></tr><tr><td>近邻易混（同一问法不同对象）</td><td>检验槽位与指代</td><td>30</td></tr><tr><td>素材不足（必须说不知道）</td><td>抑制编造</td><td>20</td></tr></table>
+
+<hr>
+
+<h2>4. 自建评测集设计</h2>
+
+<h3>4.1 素材来源与分层抽样</h3>
+
+<table><tr><th>优先级</th><th>来源</th><th>占比建议</th><th>说明</th></tr><tr><td>1</td><td>真实语音转写（脱敏）</td><td>50%</td><td>分布最真，含口音与断句</td></tr><tr><td>2</td><td>后台真实输出（结论句 + 字段）</td><td>30%</td><td>转述题的天然来源</td></tr><tr><td>3</td><td>人工构造边界题</td><td>20%</td><td>空结果、超时、素材不足、近邻易混</td></tr></table>
+
+<p>分层配比（标准档 300 条）：</p>
+
+<table><tr><th>分层</th><th>120 条（最小档）</th><th>300 条（标准档）</th><th>500 条（完整档）</th></tr><tr><td>承接语 fill</td><td>24</td><td>60</td><td>100</td></tr><tr><td>结果转述 narrate</td><td>36</td><td>90</td><td>150</td></tr><tr><td>进度转述 progress</td><td>12</td><td>30</td><td>50</td></tr><tr><td>直答措辞 answer</td><td>24</td><td>60</td><td>100</td></tr><tr><td>工具调用 tool</td><td>18</td><td>48</td><td>80</td></tr><tr><td>负例（不该说/素材不足）</td><td>6</td><td>12</td><td>20</td></tr></table>
+
+<h3>4.2 记录结构与&quot;评行为不评字面&quot;</h3>
+
+<pre><code>{
+  &quot;id&quot;: &quot;narrate-012&quot;,
+  &quot;axis&quot;: [&quot;C&quot;, &quot;B&quot;],
+  &quot;beat&quot;: &quot;narrate&quot;,
+  &quot;user_utterance&quot;: &quot;明天郑州天气怎么样&quot;,
+  &quot;material&quot;: {&quot;conclusion&quot;: &quot;明天郑州有雨，12 到 18 度&quot;, &quot;facts&quot;: [&quot;降水概率 80%&quot;]},
+  &quot;expect&quot;: {
+    &quot;behavior&quot;: &quot;narrate&quot;,
+    &quot;must_include&quot;: [&quot;郑州&quot;, &quot;12&quot;, &quot;18&quot;, &quot;80%&quot;],
+    &quot;must_not&quot;: [&quot;评价词&quot;, &quot;素材外事实&quot;],
+    &quot;max_first_sentence_chars&quot;: 15
+  },
+  &quot;meta&quot;: {&quot;source&quot;: &quot;asr_log&quot;, &quot;split&quot;: &quot;heldout&quot;, &quot;version&quot;: &quot;v1&quot;}
+}</code></pre>
+
+<p>三条硬规定：</p>
+
+<li><strong>禁止写&quot;期望文本&quot;</strong>。写了就退化成文本相似度，模型换个说法就被判错。</li>
+<li><code>must_include</code> 只放可精确匹配的原子（数字、专名、单位）。</li>
+<li><code>must_not</code> 用类别而非穷举：<code>评价词</code>、<code>素材外事实</code>、<code>承诺语</code>。</li>
+
+<h3>4.3 五类判定方式</h3>
+
+<table><tr><th>判定方式</th><th>用于</th><th>可靠性</th><th>成本</th></tr><tr><td>精确匹配（子串/正则）</td><td>数字、专名、单位</td><td>高</td><td>极低</td></tr><tr><td>结构比对</td><td>工具 id + 参数键值</td><td>高</td><td>低</td></tr><tr><td>规则计数</td><td>字符数、标点、markdown 标记</td><td>高</td><td>极低</td></tr><tr><td>LLM-judge（校准后）</td><td>越界、加评价、口语自然度</td><td>中（κ≈0.5）</td><td>中</td></tr><tr><td>人工成对比较</td><td>口语质量排序</td><td>高</td><td>高</td></tr></table>
+
+<p>原则：<strong>能用精确匹配的，绝不用 judge。</strong></p>
+
+<h3>4.4 数据量与统计下限</h3>
+
+<p>每类样本量下限：</p>
+
+<pre><code>n ≥ z² · p(1−p) / e²        z=1.96, p=0.9
+  e=±10% → 35（仅冒烟）
+  e=±5%  → 138
+  e=±3%  → 384</code></pre>
+
+<p>含义：单层少于 35 条的分数不要写进结论；想区分两个模型 3 个点的差距，单层需要 384 条。</p>
+<p>所以&quot;最小档 120 条&quot;只能做淘汰，不能做精细排位。</p>
+
+<h3>4.5 质检与版本管理</h3>
+
+<table><tr><th>检查</th><th>方法</th><th>门槛</th></tr><tr><td>素材可追溯</td><td>每条 expect 的原子必须来自 material</td><td>100%</td></tr><tr><td>配比正确</td><td>脚本统计分层条数</td><td>与 §4.1 一致</td></tr><tr><td>去重</td><td>句级 simhash</td><td>重复 &lt;3%</td></tr><tr><td>与训练集隔离</td><td>n-gram 重叠检查</td><td>13-gram 重叠 = 0</td></tr><tr><td>版本冻结</td><td><code>version</code> 字段 + 提交后冻结</td><td>评测中途不得改题</td></tr></table>
+
+<hr>
+
+<h2>5. 打分与决策</h2>
+
+<h3>5.1 硬门槛（不满足直接淘汰）</h3>
+
+<table><tr><th>门槛</th><th>阈值</th><th>依据</th></tr><tr><td>数字/专名保真</td><td>= 100%</td><td>转述改数字是最严重的可信度事故</td></tr><tr><td>自建工具参数准确率</td><td>≥ 97%</td><td>与《四层架构方案》§4.6 一致</td></tr><tr><td>越权工具调用</td><td>= 0</td><td>安全底线</td></tr><tr><td>素材外编造</td><td>= 0</td><td>同底线</td></tr><tr><td>首 token（单并发）</td><td>≤ 350ms</td><td>承接语覆盖窗口</td></tr><tr><td>24G + AWQ 并发</td><td>≥ 3</td><td>三路通话</td></tr><tr><td>量化掉点（BF16 → AWQ）</td><td>≤ 3 分</td><td>部署形态必须可比</td></tr></table>
+
+<h3>5.2 归一化</h3>
+
+<p>各集分数尺度不同（BFCL 是 0–100 准确率，人工比较是胜率），<strong>禁止直接加权</strong>。</p>
+
+<pre><code>z_i = (x_i − μ_group) / σ_group        // 候选群体内标准化
+或
+m_i = (x_i − min) / (max − min)        // 候选仅 2–3 个时用 min-max</code></pre>
+
+<p>候选少于 3 个时优先用 min-max（z-score 在 n=2 时退化为 ±1，信息量低）。</p>
+
+<h3>5.3 轴内合成与轴间加权</h3>
+
+<pre><code>轴分 = 0.7 × 自建集z + 0.3 × 公开集z
+总分 = 0.30×C保真 + 0.25×A工具 + 0.20×D口语 + 0.10×B约束 + 0.15×E时延</code></pre>
+
+<p>例外：D（口语）没有公开集，按 1.0 人工比较计；E（时延）是实测值，直接进 z 计算，不做自建/公开合成。</p>
+
+<p>权重理由：</p>
+
+<table><tr><th>轴</th><th>权重</th><th>理由</th></tr><tr><td>C 保真</td><td>30%</td><td>错一个数字，用户信任直接受损</td></tr><tr><td>A 工具</td><td>25%</td><td>决定&quot;能不能闭环&quot;</td></tr><tr><td>D 口语</td><td>20%</td><td>决定&quot;像不像人&quot;，用户感知最强</td></tr><tr><td>B 约束</td><td>10%</td><td>影响可听性，但可由模板兜底</td></tr><tr><td>E 时延</td><td>15%</td><td>硬约束，但已设门槛，此处只比余量</td></tr></table>
+
+<h3>5.4 决策规则</h3>
+
+<table><tr><th>条件</th><th>决策</th></tr><tr><td>任一门槛不过</td><td>淘汰</td></tr><tr><td>加权分差 &lt; 5 分</td><td>选小模型（4B）——省资源、首字更快</td></tr><tr><td>加权分差 ≥ 5 分</td><td>选大模型（9B）</td></tr><tr><td>分差在 4–6 分之间</td><td>看短板：转述输不能接受；工具输可以接受（可加约束解码补）</td></tr></table>
+
+<h3>5.5 算例（9B vs 4B，示意数据）</h3>
+
+<table><tr><th>轴</th><th>9B</th><th>4B</th><th>9B z</th><th>4B z</th><th>权重</th><th>9B 贡献</th><th>4B 贡献</th></tr><tr><td>C 保真</td><td>100%</td><td>98.3%</td><td>+1</td><td>−1</td><td>30%</td><td>+0.30</td><td>−0.30</td></tr><tr><td>A 工具</td><td>98.1%</td><td>94.2%</td><td>+1</td><td>−1</td><td>25%</td><td>+0.25</td><td>−0.25</td></tr><tr><td>D 口语</td><td>胜率 62%</td><td>38%</td><td>+1</td><td>−1</td><td>20%</td><td>+0.20</td><td>−0.20</td></tr><tr><td>B 约束</td><td>96%</td><td>93%</td><td>+1</td><td>−1</td><td>10%</td><td>+0.10</td><td>−0.10</td></tr><tr><td>E 时延</td><td>260ms</td><td>180ms</td><td>−1</td><td>+1</td><td>15%</td><td>−0.15</td><td>+0.15</td></tr><tr><td>合计</td><td>—</td><td>—</td><td>—</td><td>—</td><td>100%</td><td><strong>+0.70</strong></td><td><strong>−0.70</strong></td></tr></table>
+
+<p>（示例只示意算法，真实 z 值须按候选群体计算。）</p>
+
+<p>结论：9B 总分领先 1.4 个标准差，且 4B 在保真轴上不达标（98.3% &lt; 100%），先被门槛淘汰。</p>
+
+<hr>
+
+<h2>6. 冲突裁决与一致性检验</h2>
+
+<h3>6.1 同轴多集的一致性</h3>
+
+<pre><code>Kendall τ（或 Spearman ρ）≥ 0.6  → 该轴结论可信
+τ &lt; 0.6                          → 该轴存在污染或难度错配</code></pre>
+
+<p>处置：换 held-out 子集重跑；仍 &lt;0.6 则弃用其中一个集，并在报告里写明原因。</p>
+
+<h3>6.2 跨轴冲突</h3>
+
+<table><tr><th>冲突形态</th><th>裁决</th></tr><tr><td>大模型工具强、小模型转述强</td><td>转述优先（用户感知最强，且难以用工程手段补）</td></tr><tr><td>公开集说 A 好、自建集说 B 好</td><td>以自建集为准</td></tr><tr><td>时延与质量冲突</td><td>先看门槛，再看&quot;承接语能否覆盖&quot;</td></tr></table>
+
+<h3>6.3 公开集的作用边界</h3>
+
+<p>公开集可以用来：</p>
+
+<li>淘汰明显不达标的候选</li>
+<li>与外部（同事、厂商、竞品）沟通时提供共同语言</li>
+<li>交叉验证自建集结论是否离谱</li>
+
+<p>不能用来：</p>
+
+<li>单独决定选型</li>
+<li>证明&quot;可以上线&quot;（它不覆盖你的分布）</li>
+
+<hr>
+
+<h2>7. 防污染与对齐</h2>
+
+<h3>7.1 私有改写 held-out</h3>
+
+<p>每个公开集抽 20% 做三件事，只报改写后的分数：</p>
+
+<table><tr><th>改写</th><th>例子</th><th>目的</th></tr><tr><td>同义改写</td><td>&quot;把灯打开&quot; → &quot;帮我开一下灯&quot;</td><td>破坏 n-gram 记忆</td></tr><tr><td>数值替换</td><td>城市、时间、金额换掉</td><td>破坏答案记忆</td></tr><tr><td>选项打乱</td><td>多选项顺序随机</td><td>破坏位置偏好</td></tr></table>
+
+<p>判读：改写后掉分 &gt;10 分 → 疑似污染，该集降权或弃用。</p>
+
+<h3>7.2 执行一致性（不做这步，多集全白跑）</h3>
+
+<table><tr><th>项</th><th>必须统一</th></tr><tr><td>prompt / system</td><td>同一份字符串</td></tr><tr><td>chat template</td><td>与基座一致</td></tr><tr><td>约束解码</td><td>同开或同关（工具分支必须开）</td></tr><tr><td>量化</td><td>全部 AWQ 4bit</td></tr><tr><td>采样参数</td><td>temperature / top_p / max_tokens 固定</td></tr><tr><td>并发</td><td>压测报告注明并发数</td></tr></table>
+
+<h3>7.3 judge 校准</h3>
+
+<p>2026 年两项系统性研究（arXiv:2606.19544 评测 21 个 judge；arXiv:2606.13685）指向同一结论：</p>
+<p><strong>主观任务上跨 judge 一致性只有 κ≈0.51</strong>，接近随机。因此：</p>
+
+<table><tr><th>规则</th><th>说明</th></tr><tr><td>judge 与被测模型不同源</td><td>同源会系统性偏高</td></tr><tr><td>人工复核 20%</td><td>逐条比对 judge 与人的判定</td></tr><tr><td>一致率 &lt;0.7</td><td>换 judge 或把主观项拆成可判子问题（如&quot;是否出现素材外数字&quot;）</td></tr><tr><td>judge 只做初筛</td><td>最终分以人工复核后的为准</td></tr></table>
+
+<hr>
+
+<h2>8. 执行流程与预算</h2>
+
+<h3>8.1 三档预算</h3>
+
+<table><tr><th>档位</th><th>工期</th><th>包含</th><th>适用</th></tr><tr><td>最小</td><td>1 天</td><td>BFCL 子集 + 自建 120 条 + 时延</td><td>淘汰明显不行的候选</td></tr><tr><td>标准</td><td>3–5 天</td><td>BFCL v4 + IFEval + 自建 300 条 + judge 校准 + 并发与量化对比</td><td><strong>正式选型（推荐）</strong></td></tr><tr><td>完整</td><td>2 周</td><td>+ τ²-bench + FActScore 改写 + 影子 3 天</td><td>立项评审前</td></tr></table>
+
+<h3>8.2 两周标准流程</h3>
+
+<table><tr><th>日</th><th>任务</th><th>产物</th></tr><tr><td>D1–D2</td><td>造 300 条（真实转写 + 后台输出 + 构造边界）</td><td><code>eval/selfbuilt_v1.jsonl</code></td></tr><tr><td>D3</td><td>跑候选（9B AWQ / 4B AWQ / 一个云端对照）</td><td>每候选一份 per-item CSV</td></tr><tr><td>D4</td><td>跑 BFCL v4 子集 + IFEval</td><td>公开集分数表</td></tr><tr><td>D5</td><td>时延实测：首 token、整句、并发 1/4/8</td><td><code>latency.csv</code></td></tr><tr><td>D6–D7</td><td>judge 初筛 + 人工复核 20%，算一致率</td><td><code>judge_calibration.md</code></td></tr><tr><td>D8</td><td>汇总打分（z/min-max + 权重 + 门槛）</td><td><code>decision.md</code></td></tr><tr><td>D9–D10</td><td>影子模式旁路跑 3 天（只看不播）</td><td><code>shadow_report.md</code></td></tr></table>
+
+<h3>8.3 产物清单（harness 建成后）</h3>
+
+<table><tr><th>产物</th><th>说明</th></tr><tr><td><code>eval/suite.yaml</code></td><td>轴、集、权重、门槛的唯一定义</td></tr><tr><td><code>eval/selfbuilt_v1.jsonl</code></td><td>自建集（冻结版本）</td></tr><tr><td><code>eval/runner.py</code></td><td>统一跑批（同 prompt / 同量化）</td></tr><tr><td><code>eval/aggregate.py</code></td><td>z-score、加权、τ、门槛判定</td></tr><tr><td><code>eval/report/decision.md</code></td><td>选型结论与证据</td></tr></table>
+
+<hr>
+
+<h2>9. 风险与反模式</h2>
+
+<h3>9.1 五个反模式</h3>
+
+<table><tr><th>反模式</th><th>后果</th><th>纠正</th></tr><tr><td>拿榜单排名直接拍板</td><td>选到&quot;榜单强、场景弱&quot;的模型</td><td>榜单只做淘汰</td></tr><tr><td>同一轴堆三个集</td><td>该轴权重被隐式放大</td><td>每轴 ≤2 集，轴内合成</td></tr><tr><td>用期望文本做标注</td><td>退化成相似度，换说法就判错</td><td>评行为不评字面</td></tr><tr><td>judge 一把梭</td><td>κ≈0.5，结论不可复现</td><td>客观项自动判 + 主观项人审 20%</td></tr><tr><td>用 BF16 分数代表部署效果</td><td>量化掉点 2–5 分被忽略</td><td>全部按 AWQ 4bit 重跑</td></tr></table>
+
+<h3>9.2 风险与对策</h3>
+
+<table><tr><th>风险</th><th>触发信号</th><th>对策</th></tr><tr><td>评测集被训练污染</td><td>改写后掉分 &gt;10</td><td>弃用该集或只用 held-out</td></tr><tr><td>自建集分布偏</td><td>线上影子与离线差 &gt;10%</td><td>每季度用真实日志补题</td></tr><tr><td>标注者口径不一</td><td>双人标注 κ &lt;0.6</td><td>先写标注手册再标注</td></tr><tr><td>结论不可复现</td><td>两次跑分差 &gt;3</td><td>固定随机种子与采样参数，记录版本</td></tr><tr><td>过度优化评测集</td><td>线下涨、线上不涨</td><td>影子模式为准，离线只做准入</td></tr></table>
+
+<hr>
+
+<h2>10. 附录</h2>
+
+<h3>10.1 suite 配置模板</h3>
+
+<pre><code>version: 1.0
+candidates:
+  - name: qwen3.5-9b-awq
+    endpoint: http://127.0.0.1:8000/v1
+    quant: awq-int4
+  - name: qwen3.5-4b-awq
+    endpoint: http://127.0.0.1:8001/v1
+    quant: awq-int4
+
+axes:
+  C_faithfulness:
+    weight: 0.30
+    sets:
+      - {name: selfbuilt_numeric, type: selfbuilt, weight: 0.7}
+      - {name: factscore_zh, type: public, weight: 0.3}
+  A_tool:
+    weight: 0.25
+    sets:
+      - {name: selfbuilt_tool, type: selfbuilt, weight: 0.7}
+      - {name: bfcl_v4_subset, type: public, weight: 0.3}
+  D_spoken:
+    weight: 0.20
+    sets:
+      - {name: human_pairwise, type: selfbuilt, weight: 1.0}
+  B_constraint:
+    weight: 0.10
+    sets:
+      - {name: selfbuilt_length, type: selfbuilt, weight: 0.7}
+      - {name: ifeval_zh, type: public, weight: 0.3}
+  E_latency:
+    weight: 0.15
+    sets:
+      - {name: ttft_bench, type: measured, weight: 1.0}
+
+gates:
+  numeric_fidelity: 1.00
+  tool_param_acc: 0.97
+  unauthorized_tool_calls: 0
+  fabricated_facts: 0
+  ttft_ms_p50: 350
+  concurrency_at_24g: 3
+  quant_drop_max_points: 3
+
+normalize: minmax
+seed: 20261025</code></pre>
+
+<h3>10.2 参考来源</h3>
+
+<li>BFCL v4 — Berkeley Function Calling Leaderboard（Gorilla）</li>
+<li>IFEval — arXiv:2311.07911</li>
+<li>τ²-bench — ICML 2026 Oral</li>
+<li>PluginEval — arXiv:2608.08700（函数调用错误归因）</li>
+<li>FActScore / HaluEval — 公开基准（评分思路借用，中文 rubric 需重写）</li>
+<li>LLM-as-judge 可靠性 — arXiv:2606.19544（21 个 judge 的系统评测）、arXiv:2606.13685</li>
+<li>本项目《四层架构方案》§4.3–4.7（训练必要性、数据规范、指标目标值）</li>
+<li>本项目《Talker直答与工具调用方案》（工具授权域与风险分级）</li>
+
+</main></body></html>
