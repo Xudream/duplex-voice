@@ -24,7 +24,7 @@
 <h1>四层架构方案：语音交互 · 意图路由 · 小脑 · 大脑</h1>
 
 <p class='quote'>版本 v0.2　·　2026-10-25　·　适用范围：级联全双工语音助手（Talker–Thinker 两级）</p>
-<p class='quote'>本版决策：L2 <strong>规则先行、Jev 第二阶段</strong>；L3 <strong>选 8B 级模型</strong>；L2 写操作走<strong>口头确认</strong>。</p>
+<p class='quote'>本版决策：L2 <strong>规则先行、Jev 第二阶段</strong>；L3 <strong>选 8B 级（Qwen3.5-9B）</strong>；L2 写操作走<strong>口头确认</strong>。</p>
 <p class='quote'>口径约定：文中标注【实测】的为项目内真实调用或代码级验证；标注【官方】的取自厂商或论文原文；</p>
 <p class='quote'>标注【估算】的为工程推算，须在 P0 阶段用实测替换。未标注来源的对比数字一律不进评审材料。</p>
 
@@ -65,7 +65,7 @@
 
 <h3>1.4 端到端时延预算</h3>
 
-<table><tr><th>阶段</th><th>预算（ms）</th><th>依据</th><th>归属</th></tr><tr><td>判停</td><td>300–800</td><td>项目实测 800ms 静音判停；语义 VAD 下可压到 300</td><td>L1</td></tr><tr><td>ASR final</td><td>350–450</td><td>流式 fun-asr final ≈0.4s【实测】</td><td>L1</td></tr><tr><td>路由判定</td><td>≤300</td><td>规则 &lt;10ms；判别模型 p50 270–310ms【官方/独立】</td><td>L2</td></tr><tr><td>承接语首字</td><td>≤600（从说完算）</td><td>TTS 首包 ≈200–400ms【实测】</td><td>L3+编排器</td></tr><tr><td>工具窗口</td><td>600–2100</td><td>决策 450（8B）+ 执行 timeout 1500</td><td>L3</td></tr><tr><td>后台首句</td><td>800–3000</td><td>慢通道首 token ≈450ms，整句就绪 1–3s【实测】</td><td>L4</td></tr><tr><td>强制升级</td><td>&gt;3000</td><td>超预算换长承接语 + 上报</td><td>编排器</td></tr></table>
+<table><tr><th>阶段</th><th>预算（ms）</th><th>依据</th><th>归属</th></tr><tr><td>判停</td><td>300–800</td><td>项目实测 800ms 静音判停；语义 VAD 下可压到 300</td><td>L1</td></tr><tr><td>ASR final</td><td>350–450</td><td>流式 fun-asr final ≈0.4s【实测】</td><td>L1</td></tr><tr><td>路由判定</td><td>≤300</td><td>规则 &lt;10ms；判别模型 p50 270–310ms【官方/独立】</td><td>L2</td></tr><tr><td>承接语首字</td><td>≤600（从说完算）</td><td>模板池预合成：选模板 + 播放启动 ≤150ms【估算】</td><td>编排器</td></tr><tr><td>模型生成句首字（转述/直答）</td><td>≤900（从素材就绪算）</td><td>9B 首 token 250–350 + TTS 首包 300–600【估算，须 P0 实测】</td><td>L3</td></tr><tr><td>工具窗口</td><td>600–2100</td><td>决策 450（9B）+ 执行 timeout 1500</td><td>L3</td></tr><tr><td>后台首句</td><td>800–3000</td><td>慢通道首 token ≈450ms，整句就绪 1–3s【实测】</td><td>L4</td></tr><tr><td>强制升级</td><td>&gt;3000</td><td>超预算换长承接语 + 上报</td><td>编排器</td></tr></table>
 
 <p><strong>关键结论</strong>：路由 300ms 不必挤进 150ms 预算——承接语可与路由并行合成，</p>
 <p>只要承接语在路由完成前开始播，这 300ms 对用户不可感知。</p>
@@ -156,7 +156,7 @@
 
 <h3>3.5 判别模型选型：自建路线</h3>
 
-<table><tr><th>候选</th><th>基座</th><th>形态</th><th>可用性</th><th>备注</th></tr><tr><td>Microsoft-Decision-1</td><td>Qwen3.5-9B</td><td>托管</td><td>36 项基准 83.5%，宣称比 Jev 快 2.8x，$0.042/M【官方】</td><td>同为境外服务</td></tr><tr><td>H2O-Lightning-4B</td><td>Qwen3.5-4B</td><td>开源权重</td><td>可自托管</td><td>与本地 4B 部署栈一致</td></tr><tr><td>Strands Decider 2B</td><td>自研</td><td>开源</td><td>轻量</td><td>规模小，适合做二分类</td></tr><tr><td>OpenSourceJev</td><td>Qwen3-1.7B / Qwen3.5-4B</td><td>MIT，llama.cpp</td><td>零训练 logits 投影</td><td>JevBench 开源榜 capability 48.6（#57/92），需领域微调</td></tr><tr><td>自研 logits 判别器</td><td>Qwen3.5-4B</td><td>自研</td><td>完全可控</td><td><strong>推荐作为内网主路径</strong></td></tr></table>
+<table><tr><th>候选</th><th>基座</th><th>形态</th><th>可用性</th><th>备注</th></tr><tr><td>Microsoft-Decision-1</td><td>Qwen3.5-9B</td><td>托管</td><td>36 项基准 83.5%，宣称比 Jev 快 2.8x，$0.042/M【官方】</td><td>同为境外服务</td></tr><tr><td>H2O-Lightning-4B</td><td>Qwen3.5-4B</td><td>开源权重</td><td>可自托管</td><td>与本地 4B 部署栈一致</td></tr><tr><td>Strands Decider 2B</td><td>未披露</td><td>开源</td><td>轻量</td><td>规模小，适合二分类</td></tr><tr><td>OpenSourceJev</td><td>Qwen3-1.7B / Qwen3.5-4B</td><td>MIT，llama.cpp</td><td>零训练 logits 投影</td><td>JevBench 开源榜 capability 48.6（#57/92），需领域微调</td></tr><tr><td>自研 logits 判别器</td><td>Qwen3.5-4B</td><td>自研</td><td>完全可控</td><td><strong>推荐作为内网主路径</strong></td></tr></table>
 
 <p><strong>自建的核心技巧（比&quot;换成大模型&quot;更有效）</strong></p>
 
@@ -234,19 +234,19 @@
 
 <h4>4.2.1 能力需求到规模的判据</h4>
 
-<table><tr><th>能力</th><th>门槛</th><th>结论</th></tr><tr><td>承接语 / 转述 / 措辞</td><td>低（改写类）</td><td>1.5–4B 足够</td></tr><tr><td>受限工具调用</td><td>高（指令遵循 + 严格 JSON + 参数抽取）</td><td>8B 直接可用；4B 必须约束解码且仍可能漏参【项目实测结论】</td></tr><tr><td>多步规划</td><td>很高</td><td>不放 L3，归 L4</td></tr></table>
+<table><tr><th>能力</th><th>门槛</th><th>结论</th></tr><tr><td>承接语 / 转述 / 措辞</td><td>低（改写类）</td><td>1.5–4B 足够</td></tr><tr><td>受限工具调用</td><td>高（指令遵循 + 严格 JSON + 参数抽取）</td><td>9B 直接可用；4B 必须约束解码且仍可能漏参【项目实测结论】</td></tr><tr><td>多步规划</td><td>很高</td><td>不放 L3，归 L4</td></tr></table>
 
 <h4>4.2.2 基座候选</h4>
 
-<table><tr><th>候选</th><th>参数</th><th>优势</th><th>风险</th><th>结论</th></tr><tr><td>Qwen3.5-8B（AWQ/INT4）</td><td>8B</td><td>工具调用可靠、少写规则、口语质量更好</td><td>首 token +100–150ms、显存 5–6GB</td><td><strong>默认基线（2026-10-25 决策）</strong></td></tr><tr><td>Qwen3.5-4B</td><td>4B</td><td>首字最快、显存小</td><td>工具需严格约束解码，仍可能漏参</td><td>备选：首字预算吃紧时</td></tr><tr><td>现有 qwen9.30（4B 微调版）</td><td>4B</td><td>已有业务语料适配</td><td>原为&quot;直答+工具&quot;训练，需重新对齐 L3 职责</td><td>仅作对照 / 初始化对照</td></tr><tr><td>Qwen3.5-0.8B</td><td>0.8B</td><td>极快</td><td>转述易失真、口语生硬</td><td>仅用于承接语专用小模型（双模型方案）</td></tr></table>
+<table><tr><th>候选</th><th>参数</th><th>优势</th><th>风险</th><th>结论</th></tr><tr><td>Qwen3.5-9B（AWQ 4bit）</td><td>9B</td><td>工具调用可靠、少写规则、口语更好；原生 262k 上下文</td><td>首 token +100–150ms、AWQ ≈6GB【估算】</td><td><strong>默认基线（2026-10-25 决策）</strong></td></tr><tr><td>Qwen3.5-4B</td><td>4B</td><td>首字最快、显存小</td><td>工具需严格约束解码，仍可能漏参</td><td>备选：首字预算吃紧时</td></tr><tr><td>现有 qwen9.30（4B 微调版）</td><td>4B</td><td>已有业务语料适配</td><td>原为&quot;直答+工具&quot;训练，需重新对齐 L3 职责</td><td>仅作对照 / 初始化对照</td></tr><tr><td>Qwen3.5-0.8B</td><td>0.8B</td><td>极快</td><td>转述易失真、口语生硬</td><td>仅用于承接语专用小模型（双模型方案）</td></tr></table>
 
-<p>选型结论：<strong>8B 单模型为主路径</strong>（用户 2026-10-25 决策），工具调用不再依赖&quot;规则兜底 + 约束解码硬撑&quot;；</p>
+<p>选型结论：<strong>Qwen3.5-9B（8B 级）单模型为主路径</strong>（用户 2026-10-25 决策），工具调用不再依赖&quot;规则兜底 + 约束解码硬撑&quot;；</p>
 <p>4B 保留为<strong>首字预算吃紧时的降级方案</strong>，切换必须按单变量原则单独验证，不得与开工具同时进行。</p>
 <p>代价是首字 +100–150ms，由承接语覆盖（见 4.7.2 的 E 分档）。</p>
 
 <h4>4.2.3 部署形态与资源</h4>
 
-<table><tr><th>项</th><th>8B 主路径</th><th>4B 备选</th><th>口径</th></tr><tr><td>权重精度</td><td>AWQ 4bit ≈5–6GB / BF16 ≈16GB</td><td>BF16 ≈8GB / AWQ 4bit ≈3GB</td><td>【估算】</td></tr><tr><td>推理引擎</td><td>vLLM + <code>--enable-auto-tool-choice --tool-call-parser --guided-decoding-backend xgrammar</code></td><td>同左（工具分支必须开约束）</td><td>官方文档</td></tr><tr><td>首 token</td><td>200–300ms</td><td>100–200ms</td><td>【估算，须 P0 实测】</td></tr><tr><td>单卡并发</td><td>24G 可跑 2–4 并发</td><td>24G 可跑 4–8 并发</td><td>【估算】</td></tr><tr><td>结构化输出</td><td>推荐开（防越权工具），非必需</td><td><strong>必须开</strong>（工具 id / 参数枚举候选集屏蔽）</td><td>见 4.2.4</td></tr></table>
+<table><tr><th>项</th><th>9B 主路径</th><th>4B 备选</th><th>口径</th></tr><tr><td>权重精度</td><td>AWQ 4bit ≈6GB / FP8 ≈9–10GB / BF16 ≈18GB</td><td>BF16 ≈8GB / AWQ 4bit ≈3GB</td><td>【估算】</td></tr><tr><td>推理引擎</td><td>vLLM + <code>--enable-auto-tool-choice --tool-call-parser --guided-decoding-backend xgrammar</code></td><td>同左（工具分支必须开约束）</td><td>官方文档</td></tr><tr><td>首 token</td><td>200–300ms（建议 P0 实测，含 4k 上下文）</td><td>100–200ms</td><td>【估算，须 P0 实测】</td></tr><tr><td>单卡并发</td><td>24G + AWQ：约 3–6 并发（4k 上下文）</td><td>24G：约 4–8 并发</td><td>【估算】</td></tr><tr><td>上下文</td><td>原生 262k（转述/长任务友好），但长上下文会抬高首 token</td><td>32k 级</td><td>官方模型卡 / 估算</td></tr><tr><td>结构化输出</td><td>推荐开（防越权工具），非必需</td><td><strong>必须开</strong>（工具 id / 参数枚举候选集屏蔽）</td><td>见 4.2.4</td></tr></table>
 
 <p><strong>部署陷阱（项目已踩）</strong>：vLLM 的 tool-call-parser 与模型 chat template 不匹配时工具会<strong>完全不可用</strong>，</p>
 <p>P1 前必须用 5 条固定 query 单测 parser 往返。</p>
@@ -263,9 +263,9 @@
 
 <p>判据：<strong>这个能力的失败能否被模板/规则/约束解码兜住？</strong></p>
 
-<table><tr><th>能力</th><th>只靠 prompt</th><th>建议</th><th>数据量</th></tr><tr><td>承接语</td><td>70–80%（模板可跑，但会越界）</td><td>轻训</td><td>800–1,500 条</td></tr><tr><td>转述</td><td>≈60%（复读、加评价、改数字）</td><td><strong>必须训</strong></td><td>2,000–5,000 条</td></tr><tr><td>直答措辞</td><td>80%+（素材已给）</td><td>可选</td><td>500–1,000 条</td></tr><tr><td>工具调用</td><td>8B 明显好于 4B，但仍会漏参</td><td><strong>必须训</strong>（8B 可取下限）</td><td>2,000–3,000 条</td></tr><tr><td>澄清话术</td><td>90%（模板足够）</td><td>不训</td><td>3–5 个变体</td></tr></table>
+<table><tr><th>能力</th><th>只靠 prompt</th><th>建议</th><th>数据量</th></tr><tr><td>承接语</td><td>70–80%（模板池可跑，但会越界）</td><td>模板池为主 + 轻训变体</td><td>800–1,500 条</td></tr><tr><td>转述</td><td>≈60%（复读、加评价、改数字）</td><td><strong>必须训</strong></td><td>2,000–5,000 条</td></tr><tr><td>直答措辞</td><td>80%+（素材已给）</td><td>可选</td><td>500–1,000 条</td></tr><tr><td>工具调用</td><td>9B 明显好于 4B，但仍会漏参</td><td><strong>必须训</strong>（9B 可取下限）</td><td>2,000–3,000 条</td></tr><tr><td>澄清话术</td><td>90%（模板足够）</td><td>不训</td><td>3–5 个变体</td></tr></table>
 
-<p>8B 相对 4B 的实际差别：工具调用从&quot;必须靠规则兜底&quot;变成&quot;训练 + 约束即可稳&quot;，</p>
+<p>9B 相对 4B 的实际差别：工具调用从&quot;必须靠规则兜底&quot;变成&quot;训练 + 约束即可稳&quot;，</p>
 <p>因此 P3 阶段可以删掉一批补偿性规则（城市白名单这类），但<strong>防御不松</strong>：</p>
 <p>L3 风险工具、schema 校验、确认流一个都不能删。</p>
 
@@ -273,7 +273,7 @@
 
 <h4>4.4.1 五类数据与配比</h4>
 
-<table><tr><th>数据类</th><th>条数</th><th>来源</th><th>目的</th></tr><tr><td>承接语</td><td>1,200</td><td>模板 + 强模型扩写</td><td>学会&quot;只说状态不说内容&quot;、轮播不重复</td></tr><tr><td>进度转述</td><td>600</td><td>真实后台片段 + 改写</td><td>学会每段一句、不剧透未到的部分</td></tr><tr><td>结果转述</td><td>2,400</td><td>真实后台输出 + 人工改写</td><td>数字保真、去重、压成口语</td></tr><tr><td>直答措辞</td><td>800</td><td>FAQ/记忆命中样本</td><td>统一口语风格、控制长度</td></tr><tr><td>工具调用</td><td>3,000</td><td>按授权域工具逐个人工构造</td><td>参数抽取、缺参反问、空结果</td></tr><tr><td>负例（越界/不该说）</td><td>500</td><td>人工构造</td><td>抑制&quot;自创内容&quot;与&quot;话痨&quot;</td></tr><tr><td>合计</td><td>8,000–8,500</td><td>—</td><td>混训集约 0.5–0.7M token【估算】；8B 基座取下限</td></tr></table>
+<table><tr><th>数据类</th><th>条数</th><th>来源</th><th>目的</th></tr><tr><td>承接语</td><td>1,200</td><td>模板 + 强模型扩写</td><td>学会&quot;只说状态不说内容&quot;、轮播不重复</td></tr><tr><td>进度转述</td><td>600</td><td>真实后台片段 + 改写</td><td>学会每段一句、不剧透未到的部分</td></tr><tr><td>结果转述</td><td>2,400</td><td>真实后台输出 + 人工改写</td><td>数字保真、去重、压成口语</td></tr><tr><td>直答措辞</td><td>800</td><td>FAQ/记忆命中样本</td><td>统一口语风格、控制长度</td></tr><tr><td>工具调用</td><td>3,000</td><td>按授权域工具逐个人工构造</td><td>参数抽取、缺参反问、空结果</td></tr><tr><td>负例（越界/不该说）</td><td>500</td><td>人工构造</td><td>抑制&quot;自创内容&quot;与&quot;话痨&quot;</td></tr><tr><td>合计</td><td>8,000–8,500</td><td>—</td><td>混训集约 0.5–0.7M token【估算】；9B 基座取下限</td></tr></table>
 
 <h4>4.4.2 承接语数据规范</h4>
 
@@ -319,9 +319,9 @@ f_scene  信道系数：文本 1.0 / 语音转写 2.0–3.0 / 远场噪声 3.0�
 f_neg    难负例系数：1.0（不做）～2.0（1:1 近邻负例）
 f_aug    合成折算：合成:真实=1:1 时取 0.6–0.8</code></pre>
 
-<p>代入本方案：工具 5 个 × 200 × 2.5（语音）× 1.5（近邻负例）= 3,750 条 【估算】→ 8B 基座收敛更快，</p>
+<p>代入本方案：工具 5 个 × 200 × 2.5（语音）× 1.5（近邻负例）= 3,750 条 【估算】→ 9B 基座收敛更快，</p>
 <p>取 2,000–3,000；转述 4 种形态 × 200 × 3.0 = 2,400；承接语 4 类 × 200 × 1.5 = 1,200。</p>
-<p>合计约 8,000 条（8B 取下限）。实际数量以 P2 的单能力饱和实验为准，不用公式硬凑。</p>
+<p>合计约 8,000 条（9B 取下限）。实际数量以 P2 的单能力饱和实验为准，不用公式硬凑。</p>
 
 <p>数据规模的两条外部参照：</p>
 
@@ -379,6 +379,13 @@ L2 混训（工具 + 转述 + 风格）→ 只在&quot;少一次部署&quot;有�
 
 <h4>4.7.2 E 分档与 fill 预算</h4>
 
+<p>承接语的<strong>来源分两级</strong>，这是 600ms 首字预算能成立的关键：</p>
+
+<table><tr><th>优先级</th><th>来源</th><th>首字耗时</th><th>何时用</th></tr><tr><td>主路径</td><td>预合成模板池（每场景 3–5 条，离线合成好）</td><td>≤150ms（选模板 + 播放启动）</td><td>默认，第一拍一律用模板</td></tr><tr><td>增强</td><td>9B 现场生成变体</td><td>600–900ms</td><td>第二拍起、或模板池命中度低时</td></tr></table>
+
+<p>模型训练承接语仍然有价值：它产出的是&quot;更适合当前场景的变体&quot;，</p>
+<p>用于扩充模板池与第二拍之后的口播，而不是承担第一句。</p>
+
 <table><tr><th>预期首字 E</th><th>策略</th><th>备注</th></tr><tr><td>&lt;400ms</td><td>直接答</td><td>不出承接语，避免话痨</td></tr><tr><td>400–1200ms</td><td>单拍承接语</td><td>8–15 字，约 2–3s</td></tr><tr><td>≥1200ms</td><td>多拍轮播 + 进度转述</td><td>每 2–3s 一句，最多 3 拍</td></tr><tr><td>&gt;3000ms</td><td>升级话术</td><td>&quot;这个我查得慢，先给你初步结论&quot;</td></tr></table>
 
 <p>fill 预算：单轮 ≤3 拍、总时长 ≤6s；超出即视为设计缺陷（要么预测器不准，要么后台太慢）。</p>
@@ -422,11 +429,11 @@ L2 混训（工具 + 转述 + 风格）→ 只在&quot;少一次部署&quot;有�
 
 <h3>6.2 出口条件</h3>
 
-<table><tr><th>阶段</th><th>内容</th><th>单变量</th><th>出口条件</th></tr><tr><td>P0</td><td>编排器骨架 + 事件总线 + 埋点</td><td>不换模型、不开工具</td><td>四个基线数可测（首字/响应/无空洞/越界）</td></tr><tr><td>P1</td><td>L2 规则层 + 写操作口头确认</td><td>只加规则路由</td><td>规则覆盖率 ≥40%，误确认 0</td></tr><tr><td>P2</td><td>L2 Jev 判别接入（第二阶段）</td><td>只加判别模型</td><td>路由准确率 ≥95%、p95 ≤400ms</td></tr><tr><td>P3</td><td>L3 8B：承接语 LoRA + 转述 LoRA</td><td>只换权重</td><td>越界率 &lt;2%、数字保真 100%</td></tr><tr><td>P4</td><td>开受限工具（L0/L1，max_steps=1）</td><td>只开能力</td><td>参数准确率 ≥97%、越权 0</td></tr><tr><td>P5</td><td>L4 任务闭环 + 转述联调 + 注入加固</td><td>只接后台</td><td>闭环率 ≥98%、无空洞率 ≥95%、翻转率 &lt;10%</td></tr></table>
+<table><tr><th>阶段</th><th>内容</th><th>单变量</th><th>出口条件</th></tr><tr><td>P0</td><td>编排器骨架 + 事件总线 + 埋点</td><td>不换模型、不开工具</td><td>四个基线数可测（首字/响应/无空洞/越界）</td></tr><tr><td>P1</td><td>L2 规则层 + 写操作口头确认</td><td>只加规则路由</td><td>规则覆盖率 ≥40%，误确认 0</td></tr><tr><td>P2</td><td>L2 Jev 判别接入（第二阶段）</td><td>只加判别模型</td><td>路由准确率 ≥95%、p95 ≤400ms</td></tr><tr><td>P3</td><td>L3 9B：承接语 LoRA + 转述 LoRA</td><td>只换权重</td><td>越界率 &lt;2%、数字保真 100%</td></tr><tr><td>P4</td><td>开受限工具（L0/L1，max_steps=1）</td><td>只开能力</td><td>参数准确率 ≥97%、越权 0</td></tr><tr><td>P5</td><td>L4 任务闭环 + 转述联调 + 注入加固</td><td>只接后台</td><td>闭环率 ≥98%、无空洞率 ≥95%、翻转率 &lt;10%</td></tr></table>
 
 <h3>6.3 交付物清单</h3>
 
-<table><tr><th>阶段</th><th>代码</th><th>文档</th><th>数据</th></tr><tr><td>P0</td><td>编排器、事件总线、trace 埋点</td><td>本文档 1.4 / 4.7</td><td>埋点字段表</td></tr><tr><td>P1</td><td>L2 规则表、确认流状态机</td><td>3.3 / 3.10</td><td>应答词表、写操作白名单</td></tr><tr><td>P2</td><td>判别器适配层（Jev / 自建）</td><td>3.4 / 3.5</td><td>路由评测集 300–500 条</td></tr><tr><td>P3</td><td>L3 8B 推理接口、约束解码配置</td><td>4.4 / 4.5</td><td>承接语 1,200 + 转述 2,400</td></tr><tr><td>P4</td><td>工具授权域、参数校验</td><td>3.2 / 4.4.4</td><td>工具集 2,000–3,000</td></tr><tr><td>P5</td><td>task 三事件、转述联调、注入防护</td><td>第 5 章 / 3.7</td><td>长任务集 100 条、扰动集</td></tr></table>
+<table><tr><th>阶段</th><th>代码</th><th>文档</th><th>数据</th></tr><tr><td>P0</td><td>编排器、事件总线、trace 埋点</td><td>本文档 1.4 / 4.7</td><td>埋点字段表</td></tr><tr><td>P1</td><td>L2 规则表、确认流状态机</td><td>3.3 / 3.10</td><td>应答词表、写操作白名单</td></tr><tr><td>P2</td><td>判别器适配层（Jev / 自建）</td><td>3.4 / 3.5</td><td>路由评测集 300–500 条</td></tr><tr><td>P3</td><td>L3 9B 推理接口、约束解码配置</td><td>4.4 / 4.5</td><td>承接语 1,200 + 转述 2,400</td></tr><tr><td>P4</td><td>工具授权域、参数校验</td><td>3.2 / 4.4.4</td><td>工具集 2,000–3,000</td></tr><tr><td>P5</td><td>task 三事件、转述联调、注入防护</td><td>第 5 章 / 3.7</td><td>长任务集 100 条、扰动集</td></tr></table>
 
 <hr>
 

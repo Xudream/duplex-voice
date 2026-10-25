@@ -84,7 +84,7 @@
   <rect x="28" y="342" width="740" height="172" rx="10" fill="#ffffff" stroke="#d0d5dd" filter="url(#sh)"/>
   <rect x="28" y="342" width="740" height="26" rx="10" fill="#fff6ed"/>
   <rect x="28" y="360" width="740" height="8" fill="#fff6ed"/>
-  <text x="42" y="360" font-size="12.5" font-weight="700" fill="#b54708">L3　小脑（Talker LLM 8B）</text>
+  <text x="42" y="360" font-size="12.5" font-weight="700" fill="#b54708">L3　小脑（Talker LLM 9B）</text>
   <text x="754" y="360" font-size="9.5" fill="#475467" text-anchor="end">只说，不判　·　首字 ≤400ms</text>
 
   <g font-size="9.5" fill="#101828">
