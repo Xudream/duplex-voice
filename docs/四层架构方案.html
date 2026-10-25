@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>四层架构方案</title>
+<style>
+ body{margin:0;background:#f6f7f9;color:#101828;font-family:"PingFang SC",-apple-system,"Helvetica Neue",Arial,sans-serif;line-height:1.65}
+ main{max-width:1040px;margin:0 auto;padding:32px 28px 80px;background:#fff}
+ h1{font-size:26px;margin:8px 0 12px}
+ h2{font-size:20px;margin:34px 0 10px;padding-bottom:6px;border-bottom:2px solid #e4e7ec}
+ h3{font-size:15.5px;margin:22px 0 8px;color:#1d4ed8}
+ h4{font-size:13.5px;margin:16px 0 6px;color:#344054}
+ p{font-size:13.5px;margin:8px 0}
+ li{font-size:13.5px;margin:3px 0 3px 18px}
+ .quote{color:#475467;background:#f9fafb;border-left:3px solid #d0d5dd;padding:8px 12px;font-size:12.5px}
+ table{border-collapse:collapse;width:100%;margin:10px 0 16px;font-size:12.5px}
+ th,td{border:1px solid #e4e7ec;padding:6px 8px;text-align:left;vertical-align:top}
+ th{background:#f2f4f7;font-weight:600}
+ tr:nth-child(even) td{background:#fcfcfd}
+ pre{background:#0f172a;color:#e2e8f0;padding:12px 14px;border-radius:8px;overflow:auto;font-size:12px}
+ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+ figure{margin:14px 0 22px}
+ img{width:100%;border:1px solid #e4e7ec;border-radius:10px;background:#fff}
+ figcaption{font-size:12px;color:#667085;text-align:center;margin-top:6px}
+ hr{border:none;border-top:1px solid #e4e7ec;margin:26px 0}
+</style></head><body><main>
+<h1>四层架构方案：语音交互 · 意图路由 · 小脑 · 大脑</h1>
+
+<p class='quote'>版本 v0.2　·　2026-10-25　·　适用范围：级联全双工语音助手（Talker–Thinker 两级）</p>
+<p class='quote'>本版决策：L2 <strong>规则先行、Jev 第二阶段</strong>；L3 <strong>选 8B 级模型</strong>；L2 写操作走<strong>口头确认</strong>。</p>
+<p class='quote'>口径约定：文中标注【实测】的为项目内真实调用或代码级验证；标注【官方】的取自厂商或论文原文；</p>
+<p class='quote'>标注【估算】的为工程推算，须在 P0 阶段用实测替换。未标注来源的对比数字一律不进评审材料。</p>
+
+<hr>
+
+<h2>1. 方案总览</h2>
+
+<h3>1.1 设计目标与约束</h3>
+
+<p>本方案要在<strong>保持级联架构（ASR → LLM → TTS）不变</strong>的前提下，引入一个像 Gander 那样&quot;能跑任务闭环&quot;的前端，</p>
+<p>但不把交互控制训练进模型。目标与约束如下：</p>
+
+<table><tr><th>目标</th><th>量化表述</th><th>约束</th></tr><tr><td>低时延</td><td>说完→开始播 p50 ≤700ms、p95 ≤1200ms</td><td>判停与 ASR 已占 ~700ms，路由与首字必须落在剩余预算内</td></tr><tr><td>不抢话</td><td>抢话率不高于当前基线</td><td>打断判定只能由 L1 的确定性事实驱动</td></tr><tr><td>能闭环</td><td>简单任务本地完成，复杂任务可上交</td><td>本地完成不等于本地裁决，裁决权在 L2</td></tr><tr><td>可解释</td><td>每个 turn 可回答&quot;为什么走这条路&quot;</td><td>决策与台词分离，各自可单独评测</td></tr><tr><td>可迭代</td><td>换模型与开能力必须能分别验证</td><td>阶段划分必须单变量</td></tr></table>
+
+<p>三条不可让渡的约束：</p>
+
+<li><strong>模型不做时间管理</strong>：要不要先出承接语取决于预期等待时长，模型看不到时钟。</li>
+<li><strong>编排器不做语义判断</strong>：编排器只按规则与时延预算调度，不解释用户说了什么。</li>
+<li><strong>确定性事实不进模型</strong>：播放状态、是否插话、是否拒识由 L1 的规则与状态机产出（项目内已实测：模型会无视 prompt 中的确定性声明）。</li>
+
+<h3>1.2 四层职责与边界</h3>
+
+<table><tr><th>层</th><th>名称</th><th>唯一职责</th><th>输入</th><th>输出</th><th>不做</th></tr><tr><td>L1</td><td>语音交互</td><td>判断&quot;要不要响应、是否打断、听没听清&quot;</td><td>音频流、播放状态</td><td>文本 + 状态事件</td><td>不做语义理解、不选模型</td></tr><tr><td>L2</td><td>意图路由</td><td>判断&quot;本地域 / 任务域&quot;</td><td>文本 + 会话槽位</td><td>directive（指令）</td><td>不生成话术、不挑具体工具</td></tr><tr><td>L3</td><td>小脑（Talker LLM）</td><td>把指令与素材变成&quot;人话&quot;</td><td>directive + material</td><td>播报文本 + 受限工具调用</td><td>不判路由、不判打断、不规划多步</td></tr><tr><td>L4</td><td>大脑</td><td>执行复杂任务并回传结果</td><td>task_start</td><td>task_resume</td><td>不直接对用户说话</td></tr></table>
+
+<p><strong>边界判据（用于评审时吵不清的场合）</strong></p>
+
+<table><tr><th>问题</th><th>判据</th><th>归属</th></tr><tr><td>要不要先出承接语</td><td>取决于预期等待时长</td><td>编排器（横切）</td></tr><tr><td>这句话该谁答</td><td>取决于语义与风险等级</td><td>L2</td></tr><tr><td>现在要不要停播</td><td>取决于声学与播放状态</td><td>L1</td></tr><tr><td>这句怎么说</td><td>取决于措辞与素材</td><td>L3</td></tr><tr><td>这个任务怎么做</td><td>取决于业务与权限</td><td>L4</td></tr></table>
+
+<h3>1.3 系统架构图</h3>
+
+<figure><img src='assets/四层架构.svg' alt='四层架构'><figcaption>四层架构</figcaption></figure>
+
+<p>图中三条要点：</p>
+
+<li><strong>往返路径</strong>：L1 产出&quot;文本 + 状态事件&quot;，L3 产出&quot;播报文本&quot;回到 TTS——两条链路在编排器处对齐，不互相等待。</li>
+<li><strong>派活与回传分离</strong>：L3 → L4 只有 <code>task_start</code>，L4 → L3 只有 <code>task_resume</code>（结论句 + 关键字段），L3 永远拿不到全量中间状态。</li>
+<li><strong>横切编排器</strong>：节奏、事件序号、取消树、授权域、埋点都在这一列，四层里任何一层都不自行管理时间。</li>
+
+<h3>1.4 端到端时延预算</h3>
+
+<table><tr><th>阶段</th><th>预算（ms）</th><th>依据</th><th>归属</th></tr><tr><td>判停</td><td>300–800</td><td>项目实测 800ms 静音判停；语义 VAD 下可压到 300</td><td>L1</td></tr><tr><td>ASR final</td><td>350–450</td><td>流式 fun-asr final ≈0.4s【实测】</td><td>L1</td></tr><tr><td>路由判定</td><td>≤300</td><td>规则 &lt;10ms；判别模型 p50 270–310ms【官方/独立】</td><td>L2</td></tr><tr><td>承接语首字</td><td>≤600（从说完算）</td><td>TTS 首包 ≈200–400ms【实测】</td><td>L3+编排器</td></tr><tr><td>工具窗口</td><td>600–2100</td><td>决策 450（8B）+ 执行 timeout 1500</td><td>L3</td></tr><tr><td>后台首句</td><td>800–3000</td><td>慢通道首 token ≈450ms，整句就绪 1–3s【实测】</td><td>L4</td></tr><tr><td>强制升级</td><td>&gt;3000</td><td>超预算换长承接语 + 上报</td><td>编排器</td></tr></table>
+
+<p><strong>关键结论</strong>：路由 300ms 不必挤进 150ms 预算——承接语可与路由并行合成，</p>
+<p>只要承接语在路由完成前开始播，这 300ms 对用户不可感知。</p>
+
+<h3>1.5 五条设计原则</h3>
+
+<li><strong>指令与台词分离</strong>：L2 输出指令、L3 输出句子；两者不共用一次模型调用。</li>
+<li><strong>单变量迭代</strong>：换模型、开工具、加转述必须分阶段验证（沿用《Talker直答与工具调用方案》的定级）。</li>
+<li><strong>契约先行</strong>：每层交界都有 schema 与序号，晚到事件一律丢弃而不是插播。</li>
+<li><strong>宁可慢不可错</strong>：误直答的代价远大于多等 1 秒，默认保守。</li>
+<li><strong>可观测即功能</strong>：每 turn 一条 trace，指标出分布不出平均值。</li>
+
+<hr>
+
+<h2>2. L1 语音交互层</h2>
+
+<h3>2.1 组成与现状</h3>
+
+<table><tr><th>模块</th><th>实现</th><th>关键参数</th><th>状态</th></tr><tr><td>声学 VAD</td><td>Silero（帧级 32ms）</td><td>帧级门限 0.005 / 段级 0.012</td><td>已有</td></tr><tr><td>语义 VAD</td><td>自研 8 态 / Q3 4 态 / Omni 3 态</td><td>complete / incomplete / backchannel / reject / noise / tts_echo / barge_in×2</td><td>已有</td></tr><tr><td>流式 ASR</td><td>fun-asr-realtime</td><td>partial 实时、final ≈0.4s</td><td>已有</td></tr><tr><td>流式 TTS</td><td>qwen3-tts-realtime</td><td>句级合成、首包即播、不变速</td><td>已有</td></tr></table>
+
+<h3>2.2 事件契约</h3>
+
+<p>L1 对上层只暴露四类事件，禁止上层直接读音频状态：</p>
+
+<table><tr><th>事件</th><th>载荷</th><th>消费方</th></tr><tr><td><code>asr_final</code></td><td>turn_id, text, ts</td><td>L2</td></tr><tr><td><code>vad_state</code></td><td>state ∈ 8 态, confidence, ts</td><td>编排器 → 决定 respond / wait / ignore / reject</td></tr><tr><td><code>barge_in</code></td><td>intentional / unintentional, ts</td><td>编排器 → cancel 树</td></tr><tr><td><code>playback_state</code></td><td>playing / idle, utterance_id</td><td>编排器（不向 L3 暴露）</td></tr></table>
+
+<h3>2.3 指标</h3>
+
+<table><tr><th>指标</th><th>目标</th><th>口径</th></tr><tr><td>判停延迟</td><td>p50 ≤500ms / p95 ≤800ms</td><td>最后语音帧 → asr_final</td></tr><tr><td>误判停率（说一半被切）</td><td>&lt;3%</td><td>人工标注 200 段</td></tr><tr><td>打断响应</td><td>≤200ms 停播</td><td>barge_in → 播放停止</td></tr><tr><td>拒识召回</td><td>≥90%</td><td>自建拒识集（外部基准无覆盖）</td></tr></table>
+
+<hr>
+
+<h2>3. L2 意图路由层</h2>
+
+<h3>3.1 职责与边界</h3>
+
+<p>L2 只回答一个问题：<strong>这一轮该本地处理，还是该交给大脑</strong>。它输出的是指令，不是话，也不是具体工具。</p>
+
+<table><tr><th>输出 action</th><th>含义</th><th>附带字段</th></tr><tr><td><code>answer_local</code></td><td>素材已在本地可得（记忆检索 / FAQ / 纯格式化）</td><td>material</td></tr><tr><td><code>tool_local</code></td><td>本地域内的只读或可逆写工具</td><td>tool_grant（allowed / max_steps / risk_ceiling）</td></tr><tr><td><code>dispatch</code></td><td>交给 L4 执行</td><td>task_spec（意图 / slots / 预算 / 是否可取消）</td></tr><tr><td><code>drop</code></td><td>附和、噪声、回声</td><td>reason</td></tr></table>
+
+<p><strong>与 L3 的分工</strong>：L2 决定&quot;授权哪些工具&quot;，L3 决定&quot;用哪个、参数填什么&quot;。</p>
+<p>判据：新增一个工具时改的是授权表一行，还是改 L2 的判定逻辑？后者说明路由正在回流，必须纠正。</p>
+
+<h3>3.2 可计算判据</h3>
+
+<table><tr><th>判据</th><th>条件</th><th>结论</th></tr><tr><td>本地可解</td><td>无需外部信息 ∧ 单轮可解 ∧ 答案 ≤30 字 ∧ 无副作用</td><td><code>answer_local</code></td></tr><tr><td>本地工具</td><td>命中白名单 ∧ 参数单层 ∧ 预计 &lt;1.5s ∧ 风险 ≤L1</td><td><code>tool_local</code></td></tr><tr><td>必须上交</td><td>步数 &gt;1 ∨ 需业务系统 ∨ 命中 L3 风险 ∨ 置信度低于阈值</td><td><code>dispatch</code></td></tr><tr><td>丢弃</td><td>附和词 / 噪声转写 / 回声</td><td><code>drop</code></td></tr></table>
+
+<p><strong>风险分级（全方案唯一标准）</strong></p>
+
+<table><tr><th>级</th><th>例子</th><th>允许 L3 本地执行</th><th>处理</th></tr><tr><td>L0</td><td>时间、单位换算、日期推算</td><td>是</td><td>无需确认</td></tr><tr><td>L1</td><td>天气、查询类只读工具</td><td>是</td><td>带 timeout，失败即降级</td></tr><tr><td>L2</td><td>设提醒、开关灯（可逆）</td><td>是</td><td>播报确认 → 用户确认后执行</td></tr><tr><td>L3</td><td>下单、支付、门锁</td><td>否</td><td>一律归 L4</td></tr></table>
+
+<p>判据一句话：<strong>做错了能不能一句话撤回</strong>。不能 → L4。</p>
+
+<h3>3.3 三级判定链路</h3>
+
+<pre><code>asr_final
+  ├─① 规则层（毫秒级）
+  │    白名单 / 槽位正则 / 长度与语气词 / 已确认任务续接
+  │    命中 → 直接出 directive（覆盖约 40–60% 的高频请求【估算，须用日志统计替换】，目标是&quot;确定的不犹豫&quot;）
+  ├─② 判别模型层（p50 270–310ms）
+  │    Jev（托管）或 自建 Qwen + logits 约束
+  │    一次请求并行问多个原子问题，代码组合
+  └─③ 兜底层
+       模型超时 / 低置信 / 解析异常 → 默认 dispatch（宁可慢不可错）</code></pre>
+
+<p>三层是<strong>串联短路</strong>，不是投票：规则命中就不问模型；模型失联就走保守兜底。</p>
+<p>这条设计直接复用项目里&quot;高能力组件失败 → 回退低能力规则&quot;的教训：</p>
+<p>回退路径必须有保守默认，且要打 <code>degraded</code> 标记，否则误判面会放大。</p>
+
+<h3>3.4 判别模型选型：Jev 路线</h3>
+
+<p><strong>定位：第二阶段增强，不是前置依赖。</strong> 本项目先上规则层（见 3.11），Jev 只用于补齐规则覆盖不到的长尾与边界判断；</p>
+<p>规则层的降级路径必须始终可独立运行。</p>
+
+<p><strong>能力与形态【官方】</strong></p>
+
+<table><tr><th>项</th><th>事实</th><th>出处</th></tr><tr><td>定位</td><td>System One 判别模型，不生成文本</td><td>TypeSafe 官方 blog（2026-09-15）</td></tr><tr><td>接口</td><td><code>state</code>（string / JSON / array）+ typed <code>questions</code> → 概率分布 + confidence</td><td>官方 docs</td></tr><tr><td>问题类型</td><td>noul（true/false）、choice（无序选项）、score（有序等级）</td><td>官方 docs</td></tr><tr><td>并行性</td><td>同一请求内所有问题并行且<strong>相互独立</strong>（有依赖必须发两次）</td><td>官方 docs</td></tr><tr><td>规模限制</td><td>64k token/请求、32k/单问题；选项基数上限 255</td><td>官方 docs / blog</td></tr><tr><td>价格</td><td>$0.042 / M input，output 免费</td><td>官方 models 页</td></tr><tr><td>版本</td><td>jev-1.13.0 / jev-1.14.0（2026-10-14 起）</td><td>官方 models 页</td></tr></table>
+
+<p><strong>独立评测（非厂商口径）</strong></p>
+
+<table><tr><th>来源</th><th>结论</th><th>对本方案的含义</th></tr><tr><td>arXiv:2609.34024（医学，2026-09-27）</td><td>PubMedQA 78.4 vs GPT-6 Sol 78.2；MetaMedQA 74.8 vs 82.7；复杂诊断 59.8 vs 82.4；ECE 0.063（最佳）；p≥0.9 时准确率 93.4%；中位延迟 0.27–0.31s</td><td>判别类任务够用；<strong>不要用它做需要推理的判定</strong></td></tr><tr><td>Cisco 内容安全对比（2026-10）</td><td>零样本 Jev ≈ 31B LLM judge（8 个基准 7 个 AUC 更高）；但专门微调的 1B encoder 在 0.5% 误报下全面胜出</td><td>领域内微调仍优于零样本；路由类任务建议自建兜底</td></tr><tr><td>JevOut（NeurIPS 2026 Agenthon）</td><td>在 state 中加入约 31 个&quot;自然背景词&quot;，可把 61.4%–73.2% 原本正确的决策翻成预先指定的错误选项，且保持高置信</td><td><strong>路由输入必须做注入隔离</strong>，高风险动作需二次校验</td></tr></table>
+
+<p><strong>落地约束（决定能不能用）</strong></p>
+
+<table><tr><th>约束</th><th>事实</th><th>影响</th></tr><tr><td>部署</td><td>仅托管 API，无权重、无 on-prem 文档，数据在美国西海岸处理</td><td>公司内网项目无法直连；需要私有化替代</td></tr><tr><td>许可</td><td>proprietary</td><td>无法蒸馏成自有模型对外交付</td></tr><tr><td>语言</td><td>官方未列语言支持；Cisco 在 ChineseSafe 上 Jev 领先（间接证据）</td><td>中文可用性需自测，不能假设</td></tr></table>
+
+<p><strong>结论</strong>：Jev 适合做 <strong>PoC 与精度上限参照</strong>，不适合作为内网产品的唯一判别器。</p>
+
+<h3>3.5 判别模型选型：自建路线</h3>
+
+<table><tr><th>候选</th><th>基座</th><th>形态</th><th>可用性</th><th>备注</th></tr><tr><td>Microsoft-Decision-1</td><td>Qwen3.5-9B</td><td>托管</td><td>36 项基准 83.5%，宣称比 Jev 快 2.8x，$0.042/M【官方】</td><td>同为境外服务</td></tr><tr><td>H2O-Lightning-4B</td><td>Qwen3.5-4B</td><td>开源权重</td><td>可自托管</td><td>与本地 4B 部署栈一致</td></tr><tr><td>Strands Decider 2B</td><td>自研</td><td>开源</td><td>轻量</td><td>规模小，适合做二分类</td></tr><tr><td>OpenSourceJev</td><td>Qwen3-1.7B / Qwen3.5-4B</td><td>MIT，llama.cpp</td><td>零训练 logits 投影</td><td>JevBench 开源榜 capability 48.6（#57/92），需领域微调</td></tr><tr><td>自研 logits 判别器</td><td>Qwen3.5-4B</td><td>自研</td><td>完全可控</td><td><strong>推荐作为内网主路径</strong></td></tr></table>
+
+<p><strong>自建的核心技巧（比&quot;换成大模型&quot;更有效）</strong></p>
+
+<li><strong>logits 投影代替自由生成</strong>：共享前缀 → 取 next-token logits → 只在候选集上 softmax → 类型化决策。</li>
+<p>   好处：零 JSON 语法错误、延迟低、可给概率。</p>
+<li><strong>候选集在解码期屏蔽</strong>：未授权选项不参与 softmax，等价于&quot;物理上不可能输出错工具&quot;。</li>
+<li><strong>校准要自己做</strong>：官方明确不对客户数据微调；自建后必须重新标定阈值（ECE + 选择性预测曲线）。</li>
+
+<h3>3.6 置信度与阈值分级</h3>
+
+<table><tr><th>置信区间</th><th>含义</th><th>动作</th></tr><tr><td>高（conf ≥0.9 且 p≥0.9）</td><td>明确</td><td>自动执行（仅 L0/L1）</td></tr><tr><td>中（0.6–0.9）</td><td>有倾向</td><td>L2 写操作必须先确认；否则上交</td></tr><tr><td>低（&lt;0.6）</td><td>无把握</td><td>一律 <code>dispatch</code>，不硬答</td></tr></table>
+
+<p>阈值不设单一数字，按动作后果分级：</p>
+
+<table><tr><th>动作</th><th>阈值</th><th>理由</th></tr><tr><td>L0 本地格式化</td><td>0.6</td><td>错了也就是多说一句</td></tr><tr><td>L1 只读工具</td><td>0.8</td><td>错了会答非所问</td></tr><tr><td>L2 可逆写</td><td>0.9 + 口头确认（流程见 3.10）</td><td>错了要撤回</td></tr><tr><td>L3 有副作用</td><td>不适用</td><td>不走模型判定，直接归 L4</td></tr></table>
+
+<h3>3.7 鲁棒性与注入防护</h3>
+
+<p>JevOut 的结论（31 个词可翻转 61.4%–73.2% 的决策）对路由是致命问题，因为路由的 state 里必然包含用户原话。</p>
+<p>三条硬措施：</p>
+
+<li><strong>结构隔离</strong>：<code>state</code> 用 JSON 字段承载（<code>{&quot;user_text&quot;: &quot;...&quot;, &quot;slots&quot;: {...}}</code>），用户内容只出现在被引用的字段里，</li>
+<p>   题目模板固定，不允许用户文本改写问题本身。</p>
+<li><strong>问题原子化</strong>：每题只问一件事（&quot;这句是否在请求外部信息&quot;），不把多个因素塞进一题——单题被带偏的影响面更小。</li>
+<li><strong>高风险二次校验</strong>：L2 及以上动作，第二跳用另一组问题交叉验证；两跳不一致 → <code>dispatch</code>。</li>
+
+<h3>3.8 输出契约</h3>
+
+<table><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr><tr><td><code>turn_id</code></td><td>string</td><td>是</td><td>一次用户输入一个 turn</td></tr><tr><td><code>action</code></td><td>enum</td><td>是</td><td>answer_local / tool_local / dispatch / drop</td></tr><tr><td><code>confidence</code></td><td>float</td><td>是</td><td>0–1，最终决策的置信度</td></tr><tr><td><code>route_source</code></td><td>enum</td><td>是</td><td>rule / model / fallback（用于归因）</td></tr><tr><td><code>material</code></td><td>object</td><td>否</td><td>answer_local 时给结论句、要点、关键数字</td></tr><tr><td><code>tool_grant</code></td><td>object</td><td>否</td><td>allowed / max_steps / risk_ceiling / per_tool_timeout_ms</td></tr><tr><td><code>task_spec</code></td><td>object</td><td>否</td><td>意图、slots、预算、可取消级别</td></tr><tr><td><code>budget_ms</code></td><td>int</td><td>是</td><td>本 turn 的剩余预算，编排器据此分档</td></tr><tr><td><code>degraded</code></td><td>bool</td><td>是</td><td>是否走过降级路径</td></tr></table>
+
+<h3>3.9 评测方案</h3>
+
+<table><tr><th>指标</th><th>定义</th><th>目标</th></tr><tr><td>路由准确率</td><td>与人工标注一致</td><td>≥95%</td></tr><tr><td>误直答率</td><td>该上交却本地答了</td><td>&lt;1%</td></tr><tr><td>误派活率</td><td>本可本地处理却上交</td><td>&lt;20%（体验指标，可放宽）</td></tr><tr><td>选择性预测</td><td>p≥0.9 时的准确率（coverage-accuracy）</td><td>≥95%，且覆盖 ≥60%</td></tr><tr><td>路由时延</td><td>p50 / p95</td><td>≤300ms / ≤400ms</td></tr><tr><td>注入鲁棒性</td><td>加干扰后翻转率</td><td>&lt;10%</td></tr></table>
+
+<p><strong>评测集构造</strong>：300–500 条真实语音转写，分层抽样：</p>
+
+<table><tr><th>分层</th><th>占比</th><th>用途</th></tr><tr><td>常规指令</td><td>40%</td><td>主指标</td></tr><tr><td>近邻易混（同一问法不同对象）</td><td>20%</td><td>检验槽位与指代</td></tr><tr><td>需要多步/业务系统</td><td>15%</td><td>检验上交判断</td></tr><tr><td>附和/噪声/回声</td><td>15%</td><td>检验 drop</td></tr><tr><td>拒识与残缺句</td><td>10%</td><td>检验澄清触发</td></tr></table>
+
+<h3>3.10 写操作的口头确认流程</h3>
+
+<p>适用：L2 可逆写（设提醒、开关灯、调温度）。L3 有副作用一律不走本流程（归 L4）。</p>
+
+<table><tr><th>步</th><th>动作</th><th>归属</th></tr><tr><td>1</td><td>判定 tool_local 且 risk=L2 → 不执行，下发 clarify 指令</td><td>L2</td></tr><tr><td>2</td><td>播确认问句，必须复述关键参数（&quot;明早七点提醒带伞，对吗&quot;）</td><td>L3</td></tr><tr><td>3</td><td>用户口头应答 → 语义 VAD 判状态 + ASR 出文本</td><td>L1</td></tr><tr><td>4</td><td>判定确认意图：明确肯定 → 执行；明确否定 → 取消；不确定 → 重问一次</td><td>L2</td></tr><tr><td>5</td><td>执行后播回执（&quot;设好了&quot;）</td><td>L3</td></tr><tr><td>6</td><td>8s 无应答 → 作废，播&quot;那这次先不设了&quot;</td><td>编排器</td></tr></table>
+
+<p>四条硬规则：</p>
+
+<table><tr><th>规则</th><th>理由</th></tr><tr><td>只接受明确肯定词表（是/对/好/可以/没问题/嗯对）</td><td>&quot;嗯&quot;可能是 backchannel；项目实测单字歧义模型判不准（&quot;什么？&quot;被判成 backchannel）</td></tr><tr><td>确认问句必须复述关键参数</td><td>用户改主意时能当场发现</td></tr><tr><td>只重问一次</td><td>防死循环与话痨</td></tr><tr><td>确认期内出现噪声/残句/未判停 → 视为未确认</td><td>宁可作废，不可误执行</td></tr></table>
+
+<p>应答词表（初版，须用真实录音扩充）：</p>
+
+<table><tr><th>类别</th><th>示例</th><th>处理</th></tr><tr><td>肯定</td><td>是、对、好、可以、没问题、嗯对</td><td>执行</td></tr><tr><td>否定</td><td>不用、算了、不是、取消</td><td>取消并播&quot;好的，已取消&quot;</td></tr><tr><td>歧义</td><td>嗯、啊、嗯？</td><td>重问一次（仅一次）</td></tr><tr><td>无关</td><td>别的话/背景人声</td><td>视为未确认，超时作废</td></tr></table>
+
+<p>审计要求：每次确认都要落一条记录（ASR 文本、VAD 状态、判定结果、是否执行），</p>
+<p>用于事后复盘误确认。</p>
+
+<h3>3.11 分阶段落地</h3>
+
+<table><tr><th>阶段</th><th>内容</th><th>出口条件</th></tr><tr><td>P0</td><td>规则层 + 埋点</td><td>规则覆盖率 ≥40%，误判可归因</td></tr><tr><td>P1</td><td>口头确认流 + 写操作白名单</td><td>误确认 0，超时作废正确</td></tr><tr><td>P2</td><td>Jev 判别接入（第二阶段，非前置依赖）</td><td>路由准确率 ≥95%，p95 ≤400ms</td></tr><tr><td>P3</td><td>置信度阈值标定</td><td>误直答率 &lt;1%，选择性预测达标</td></tr><tr><td>P4</td><td>注入鲁棒性加固</td><td>翻转率 &lt;10%</td></tr><tr><td>P5</td><td>授权域下发（与 L3 联动）</td><td>越权调用 0</td></tr></table>
+
+<p><strong>规则先行是刻意的</strong>：Jev 是境外托管服务（数据在美国西海岸处理、无权重），</p>
+<p>内网不可用时产品必须能只靠规则跑通。因此 Jev 上线只承担&quot;提升覆盖率与边界判断&quot;，</p>
+<p>不承担&quot;唯一依赖&quot;——规则层的降级路径永远保留。</p>
+
+<hr>
+
+<h2>4. L3 小脑（Talker LLM）</h2>
+
+<h3>4.1 职责与产出</h3>
+
+<p>L3 是&quot;嘴&quot;，不是&quot;脑&quot;。它只接受指令与素材，产出播报文本或受限工具调用。</p>
+
+<table><tr><th>产出</th><th>触发指令</th><th>典型长度</th><th>硬约束</th></tr><tr><td>承接语</td><td><code>beat=fill</code></td><td>8–15 字</td><td>不出现素材外信息、不承诺结果</td></tr><tr><td>进度转述</td><td><code>beat=progress</code></td><td>≤20 字/段</td><td>只描述范围与下一步</td></tr><tr><td>结果转述</td><td><code>beat=narrate</code></td><td>首句 ≤15 字</td><td>数字与专名原样、去重、不加评价</td></tr><tr><td>直答措辞</td><td><code>action=answer_local</code></td><td>≤30 字</td><td>只能用 material 里的事实</td></tr><tr><td>澄清话术</td><td><code>action=clarify</code></td><td>≤15 字</td><td>2–3 个变体轮换</td></tr><tr><td>受限工具调用</td><td><code>action=tool_local</code> + grant</td><td>—</td><td>只能选 allowed 内的工具，单步</td></tr></table>
+
+<h3>4.2 模型选型</h3>
+
+<h4>4.2.1 能力需求到规模的判据</h4>
+
+<table><tr><th>能力</th><th>门槛</th><th>结论</th></tr><tr><td>承接语 / 转述 / 措辞</td><td>低（改写类）</td><td>1.5–4B 足够</td></tr><tr><td>受限工具调用</td><td>高（指令遵循 + 严格 JSON + 参数抽取）</td><td>8B 直接可用；4B 必须约束解码且仍可能漏参【项目实测结论】</td></tr><tr><td>多步规划</td><td>很高</td><td>不放 L3，归 L4</td></tr></table>
+
+<h4>4.2.2 基座候选</h4>
+
+<table><tr><th>候选</th><th>参数</th><th>优势</th><th>风险</th><th>结论</th></tr><tr><td>Qwen3.5-8B（AWQ/INT4）</td><td>8B</td><td>工具调用可靠、少写规则、口语质量更好</td><td>首 token +100–150ms、显存 5–6GB</td><td><strong>默认基线（2026-10-25 决策）</strong></td></tr><tr><td>Qwen3.5-4B</td><td>4B</td><td>首字最快、显存小</td><td>工具需严格约束解码，仍可能漏参</td><td>备选：首字预算吃紧时</td></tr><tr><td>现有 qwen9.30（4B 微调版）</td><td>4B</td><td>已有业务语料适配</td><td>原为&quot;直答+工具&quot;训练，需重新对齐 L3 职责</td><td>仅作对照 / 初始化对照</td></tr><tr><td>Qwen3.5-0.8B</td><td>0.8B</td><td>极快</td><td>转述易失真、口语生硬</td><td>仅用于承接语专用小模型（双模型方案）</td></tr></table>
+
+<p>选型结论：<strong>8B 单模型为主路径</strong>（用户 2026-10-25 决策），工具调用不再依赖&quot;规则兜底 + 约束解码硬撑&quot;；</p>
+<p>4B 保留为<strong>首字预算吃紧时的降级方案</strong>，切换必须按单变量原则单独验证，不得与开工具同时进行。</p>
+<p>代价是首字 +100–150ms，由承接语覆盖（见 4.7.2 的 E 分档）。</p>
+
+<h4>4.2.3 部署形态与资源</h4>
+
+<table><tr><th>项</th><th>8B 主路径</th><th>4B 备选</th><th>口径</th></tr><tr><td>权重精度</td><td>AWQ 4bit ≈5–6GB / BF16 ≈16GB</td><td>BF16 ≈8GB / AWQ 4bit ≈3GB</td><td>【估算】</td></tr><tr><td>推理引擎</td><td>vLLM + <code>--enable-auto-tool-choice --tool-call-parser --guided-decoding-backend xgrammar</code></td><td>同左（工具分支必须开约束）</td><td>官方文档</td></tr><tr><td>首 token</td><td>200–300ms</td><td>100–200ms</td><td>【估算，须 P0 实测】</td></tr><tr><td>单卡并发</td><td>24G 可跑 2–4 并发</td><td>24G 可跑 4–8 并发</td><td>【估算】</td></tr><tr><td>结构化输出</td><td>推荐开（防越权工具），非必需</td><td><strong>必须开</strong>（工具 id / 参数枚举候选集屏蔽）</td><td>见 4.2.4</td></tr></table>
+
+<p><strong>部署陷阱（项目已踩）</strong>：vLLM 的 tool-call-parser 与模型 chat template 不匹配时工具会<strong>完全不可用</strong>，</p>
+<p>P1 前必须用 5 条固定 query 单测 parser 往返。</p>
+
+<h4>4.2.4 结构化输出策略</h4>
+
+<p>三层防线，从便宜到贵：</p>
+
+<li><strong>模板 + 候选集</strong>：工具 id 只在 allowed 集合上 softmax（解码期物理屏蔽）。</li>
+<li><strong>JSON schema 约束</strong>：参数枚举走 XGrammar，格式错误率归零。</li>
+<li><strong>后置校验</strong>：参数类型/范围校验失败 → 走澄清话术，不重试超过一次。</li>
+
+<h3>4.3 训练必要性判断</h3>
+
+<p>判据：<strong>这个能力的失败能否被模板/规则/约束解码兜住？</strong></p>
+
+<table><tr><th>能力</th><th>只靠 prompt</th><th>建议</th><th>数据量</th></tr><tr><td>承接语</td><td>70–80%（模板可跑，但会越界）</td><td>轻训</td><td>800–1,500 条</td></tr><tr><td>转述</td><td>≈60%（复读、加评价、改数字）</td><td><strong>必须训</strong></td><td>2,000–5,000 条</td></tr><tr><td>直答措辞</td><td>80%+（素材已给）</td><td>可选</td><td>500–1,000 条</td></tr><tr><td>工具调用</td><td>8B 明显好于 4B，但仍会漏参</td><td><strong>必须训</strong>（8B 可取下限）</td><td>2,000–3,000 条</td></tr><tr><td>澄清话术</td><td>90%（模板足够）</td><td>不训</td><td>3–5 个变体</td></tr></table>
+
+<p>8B 相对 4B 的实际差别：工具调用从&quot;必须靠规则兜底&quot;变成&quot;训练 + 约束即可稳&quot;，</p>
+<p>因此 P3 阶段可以删掉一批补偿性规则（城市白名单这类），但<strong>防御不松</strong>：</p>
+<p>L3 风险工具、schema 校验、确认流一个都不能删。</p>
+
+<h3>4.4 训练数据方案</h3>
+
+<h4>4.4.1 五类数据与配比</h4>
+
+<table><tr><th>数据类</th><th>条数</th><th>来源</th><th>目的</th></tr><tr><td>承接语</td><td>1,200</td><td>模板 + 强模型扩写</td><td>学会&quot;只说状态不说内容&quot;、轮播不重复</td></tr><tr><td>进度转述</td><td>600</td><td>真实后台片段 + 改写</td><td>学会每段一句、不剧透未到的部分</td></tr><tr><td>结果转述</td><td>2,400</td><td>真实后台输出 + 人工改写</td><td>数字保真、去重、压成口语</td></tr><tr><td>直答措辞</td><td>800</td><td>FAQ/记忆命中样本</td><td>统一口语风格、控制长度</td></tr><tr><td>工具调用</td><td>3,000</td><td>按授权域工具逐个人工构造</td><td>参数抽取、缺参反问、空结果</td></tr><tr><td>负例（越界/不该说）</td><td>500</td><td>人工构造</td><td>抑制&quot;自创内容&quot;与&quot;话痨&quot;</td></tr><tr><td>合计</td><td>8,000–8,500</td><td>—</td><td>混训集约 0.5–0.7M token【估算】；8B 基座取下限</td></tr></table>
+
+<h4>4.4.2 承接语数据规范</h4>
+
+<p>每条样本必须满足：</p>
+
+<li>不含指令中的具体内容（不出现&quot;正在为您打开客厅灯&quot;这类执行描述）。</li>
+<li>不承诺结果（不出现&quot;马上就好&quot;&quot;一定能查到&quot;）。</li>
+<li>长度 8–15 字；实测 14 字≈3s，与慢通道首句就绪时间匹配。</li>
+<li>同组建 3–5 个等价变体，标注 <code>beat</code>，避免每轮同一句。</li>
+
+<h4>4.4.3 转述数据规范</h4>
+
+<table><tr><th>规则</th><th>说明</th><th>反例</th></tr><tr><td>数字原样</td><td>不改写、不换算、不四舍五入</td><td>3,200 元 → &quot;三千多&quot;</td></tr><tr><td>实体原样</td><td>专名不翻译、不缩写</td><td>&quot;Qwen3.5-4B&quot; → &quot;千问&quot;</td></tr><tr><td>去重</td><td>同一实体/结论只说一次</td><td>连续两句都说&quot;三个城市&quot;</td></tr><tr><td>不加评价</td><td>不出现&quot;很不错/不太理想&quot;</td><td>转述阶段做判断</td></tr><tr><td>增量</td><td>每段一句，带 forward-only 语义</td><td>每段都把前文重念一遍</td></tr></table>
+
+<h4>4.4.4 工具调用数据规范</h4>
+
+<p>每工具 300–800 条，覆盖五类：</p>
+
+<table><tr><th>类型</th><th>占比</th><th>例子</th></tr><tr><td>参数完整</td><td>50%</td><td>&quot;明天早上七点提醒我带伞&quot;</td></tr><tr><td>缺参需反问</td><td>15%</td><td>&quot;设个提醒&quot; → 反问几点</td></tr><tr><td>参数歧义</td><td>15%</td><td>同名城市、同名设备</td></tr><tr><td>空结果</td><td>10%</td><td>查询无命中</td></tr><tr><td>越界请求</td><td>10%</td><td>要求两步 / 要求写操作 → 输出升级建议</td></tr></table>
+
+<h4>4.4.5 负例与越界样本</h4>
+
+<p>负例是这批数据里最值钱的部分，直接决定&quot;话痨率&quot;和&quot;越界率&quot;：</p>
+
+<table><tr><th>负例类型</th><th>构造方式</th><th>期望行为</th></tr><tr><td>素材不足</td><td>只给结论句，问细节</td><td>说&quot;这个我没拿到&quot;，不编</td></tr><tr><td>不该承接</td><td>等待 &lt;400ms 的场景</td><td>直接答，不出承接语</td></tr><tr><td>backchannel</td><td>用户&quot;嗯/对&quot;</td><td>不出声（本层不产生输出）</td></tr><tr><td>重复播报</td><td>同 turn 第二拍</td><td>换变体或跳过</td></tr><tr><td>噪声转写</td><td>电视/背景人声</td><td>由 L2 drop，L3 不接单</td></tr></table>
+
+<h4>4.4.6 数据量计算</h4>
+
+<p>统计下限（每类）：</p>
+
+<pre><code>n ≥ z² · p(1−p) / e²        z=1.96, p=0.9
+   e=±10% → n≈35（仅冒烟）
+   e=±5%  → n≈138
+   e=±3%  → n≈384</code></pre>
+
+<p>工程公式：</p>
+
+<pre><code>N_total = Σ_t ( K_t × n_min × f_scene × f_neg ) × f_aug
+
+K_t      该类别的子类数（意图数 / 工具数 / 转述形态数）
+n_min    每子类下限（推荐 200）
+f_scene  信道系数：文本 1.0 / 语音转写 2.0–3.0 / 远场噪声 3.0–5.0
+f_neg    难负例系数：1.0（不做）～2.0（1:1 近邻负例）
+f_aug    合成折算：合成:真实=1:1 时取 0.6–0.8</code></pre>
+
+<p>代入本方案：工具 5 个 × 200 × 2.5（语音）× 1.5（近邻负例）= 3,750 条 【估算】→ 8B 基座收敛更快，</p>
+<p>取 2,000–3,000；转述 4 种形态 × 200 × 3.0 = 2,400；承接语 4 类 × 200 × 1.5 = 1,200。</p>
+<p>合计约 8,000 条（8B 取下限）。实际数量以 P2 的单能力饱和实验为准，不用公式硬凑。</p>
+
+<p>数据规模的两条外部参照：</p>
+
+<li>只学格式/风格，<strong>500–2,000 条</strong>即可（LIMA 用 1,000 条做出可用对齐【论文】）。</li>
+<li>数据&quot;选得对&quot;可抵 3–4.5 倍数据量（GRAPE：1/3 数据 + 半 epochs 超过 Tulu3-SFT 3.5%【论文】）。</li>
+<li>重复训练的上限：同一份数据重复 ≤4 个 epoch ≈ 新数据（Muennighoff et al., arXiv:2305.16264【论文】）。</li>
+
+<h4>4.4.7 数据质检</h4>
+
+<table><tr><th>检查项</th><th>方法</th><th>门槛</th></tr><tr><td>素材可追溯</td><td>每条答案的关键事实必须能在 material 找到</td><td>100%</td></tr><tr><td>长度合规</td><td>脚本统计字符数分布</td><td>承接语 8–15 字占 ≥90%</td></tr><tr><td>重复度</td><td>句级 simhash 去重</td><td>重复率 &lt;5%</td></tr><tr><td>语言一致性</td><td>中文（术语可保留英文）</td><td>抽检 10%</td></tr><tr><td>无决策标签</td><td>扫描是否混入&quot;派活/路由&quot;类标签</td><td>0 条</td></tr></table>
+
+<h3>4.5 训练方案</h3>
+
+<h4>4.5.1 方式与超参</h4>
+
+<table><tr><th>项</th><th>取值</th><th>理由</th></tr><tr><td>方式</td><td>LoRA（数据稀缺时优于全参）</td><td>Bohnet 2025：LoRA 在技能获取与遗忘之间最优【论文】</td></tr><tr><td>r / alpha / dropout</td><td>32 / 64 / 0.1</td><td>沿用项目语义 VAD 增训的稳定配置</td></tr><tr><td>学习率 / warmup</td><td>1e-4 / 200 步</td><td>同上</td></tr><tr><td>epoch</td><td>2–3（上限 4）</td><td>超过 4 收益趋零且易背答案</td></tr><tr><td>序列长度 / packing</td><td>4096 / 开启</td><td>转述样本长短混合</td></tr><tr><td>精度</td><td>BF16（GPU）/ FP16（Mac 仅小样）</td><td>MPS bf16 不完整</td></tr><tr><td>单卡时长</td><td>24G 单卡约 1.5–3h【估算】</td><td>须实测替换</td></tr></table>
+
+<h4>4.5.2 训练-推理一致性</h4>
+
+<table><tr><th>项</th><th>训练</th><th>推理</th><th>必须对齐</th></tr><tr><td>chat template</td><td>与基座一致</td><td>vLLM 同模板</td><td>否则工具解析全错</td></tr><tr><td>stop token</td><td>句末</td><td>同</td><td>否则多吐半句</td></tr><tr><td>系统提示</td><td>固定的 L3 角色与硬约束</td><td>同字符串</td><td>否则行为漂移</td></tr><tr><td>解码配置</td><td>自由生成</td><td>工具分支走约束解码</td><td>两条通道分开配</td></tr></table>
+
+<h4>4.5.3 防遗忘与回归门槛</h4>
+
+<table><tr><th>检查</th><th>门槛</th><th>方法</th></tr><tr><td>通用口语能力</td><td>不退化 &gt;2 分</td><td>保留 200 条通用口语评测</td></tr><tr><td>工具调用参数准确率</td><td>≥97%</td><td>专项集</td></tr><tr><td>越界率</td><td>&lt;2%</td><td>负例集</td></tr><tr><td>数字保真</td><td>100%</td><td>转述专项集</td></tr><tr><td>首字延迟</td><td>不劣于基线 10%</td><td>在线采样</td></tr></table>
+
+<p>任一门槛不达标：回退到上一版 LoRA，并先修数据而不是调超参。</p>
+
+<h4>4.5.4 迭代路径</h4>
+
+<pre><code>L0 不训（prompt + 模板 + 约束解码）→ 拿四个基线数
+L1 单能力 LoRA（先承接语，再转述）→ 每次只训一个行为，可归因
+L2 混训（工具 + 转述 + 风格）→ 只在&quot;少一次部署&quot;有价值时做</code></pre>
+
+<h3>4.6 评测体系</h3>
+
+<h4>4.6.1 离线评测集</h4>
+
+<table><tr><th>分层</th><th>条数</th><th>来源</th><th>用途</th></tr><tr><td>常规短问答</td><td>150</td><td>真实语音转写</td><td>主指标</td></tr><tr><td>长任务（触发派活）</td><td>100</td><td>真实 + 构造</td><td>承接/转述</td></tr><tr><td>工具调用</td><td>100</td><td>构造 + 真实</td><td>参数准确率</td></tr><tr><td>拒识/噪声/回声</td><td>60</td><td>自建</td><td>澄清与静默</td></tr><tr><td>边界（近邻易混）</td><td>90</td><td>构造</td><td>越界与指代</td></tr></table>
+
+<p>共 500 条，人工标注&quot;期望行为&quot;（不是期望文本），评行为不评字面。</p>
+
+<h4>4.6.2 指标与目标值</h4>
+
+<table><tr><th>组</th><th>指标</th><th>目标</th></tr><tr><td>时延</td><td>首字延迟（首个音频包）</td><td>p50 ≤600ms / p95 ≤900ms</td></tr><tr><td>时延</td><td>响应延迟（说完→开始播）</td><td>p50 ≤700ms / p95 ≤1200ms</td></tr><tr><td>节奏</td><td>无空洞率（无 &gt;200ms 静默）</td><td>≥95%</td></tr><tr><td>节奏</td><td>话痨率（不必要 fill）</td><td>≤10%</td></tr><tr><td>质量</td><td>承接语越界率</td><td>&lt;2%</td></tr><tr><td>质量</td><td>转述数字保真</td><td>100%</td></tr><tr><td>质量</td><td>重复播报率</td><td>&lt;5%</td></tr><tr><td>闭环</td><td>工具参数准确率</td><td>≥97%</td></tr><tr><td>闭环</td><td>空结果处理正确率</td><td>≥95%</td></tr><tr><td>安全</td><td>越权工具调用 / L3 风险触碰</td><td>0 / 0</td></tr></table>
+
+<h4>4.6.3 在线 A/B 与归因</h4>
+
+<table><tr><th>方法</th><th>做法</th><th>判读</th></tr><tr><td>影子模式</td><td>新版本只算不播，与线上对比</td><td>先跑 3 天再灰度</td></tr><tr><td>单变量</td><td>换模型与开工具分两批</td><td>指标不达标时能归因</td></tr><tr><td>回滚条件</td><td>越界率或误直答率超标即回滚</td><td>门限写进发布单</td></tr></table>
+
+<h3>4.7 编排接口</h3>
+
+<h4>4.7.1 渲染请求</h4>
+
+<table><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr><tr><td><code>turn_id</code></td><td>string</td><td>是</td><td>与 L1/L2 同源</td></tr><tr><td><code>beat</code></td><td>enum</td><td>是</td><td>fill / progress / narrate / answer / clarify</td></tr><tr><td><code>beat_seq</code></td><td>int</td><td>是</td><td>同一 turn 内的拍序号，用于去重</td></tr><tr><td><code>material</code></td><td>object</td><td>是</td><td>结论句、要点、关键数字；answer 时必填</td></tr><tr><td><code>slots</code></td><td>object</td><td>否</td><td>已确认参数（仅用于代词消解）</td></tr><tr><td><code>said_set</code></td><td>array</td><td>是</td><td>已播报实体与数字，用于去重</td></tr><tr><td><code>tool_grant</code></td><td>object</td><td>否</td><td>仅 tool_local 时下发</td></tr><tr><td><code>deadline_ms</code></td><td>int</td><td>是</td><td>首字截止，超时降级</td></tr><tr><td><code>style</code></td><td>object</td><td>否</td><td>语速档位、语气</td></tr></table>
+
+<h4>4.7.2 E 分档与 fill 预算</h4>
+
+<table><tr><th>预期首字 E</th><th>策略</th><th>备注</th></tr><tr><td>&lt;400ms</td><td>直接答</td><td>不出承接语，避免话痨</td></tr><tr><td>400–1200ms</td><td>单拍承接语</td><td>8–15 字，约 2–3s</td></tr><tr><td>≥1200ms</td><td>多拍轮播 + 进度转述</td><td>每 2–3s 一句，最多 3 拍</td></tr><tr><td>&gt;3000ms</td><td>升级话术</td><td>&quot;这个我查得慢，先给你初步结论&quot;</td></tr></table>
+
+<p>fill 预算：单轮 ≤3 拍、总时长 ≤6s；超出即视为设计缺陷（要么预测器不准，要么后台太慢）。</p>
+
+<h4>4.7.3 取消与降级</h4>
+
+<table><tr><th>场景</th><th>处理</th></tr><tr><td>播报中用户插话</td><td>编排器 cancel(turn_id) → L3 停止生成、TTS 停播</td></tr><tr><td>工具执行中插话</td><td>取消可撤销工具；已确认的写操作不撤回，只停播</td></tr><tr><td>模型超时</td><td>降级为模板话术（3 条兜底），并打 <code>degraded</code></td></tr><tr><td>素材缺失</td><td>说&quot;这个我没拿到&quot;，禁止编造</td></tr></table>
+
+<h3>4.8 风险与对策</h3>
+
+<table><tr><th>风险</th><th>表现</th><th>对策</th></tr><tr><td>长成&quot;小 Thinker&quot;</td><td>开始自创素材外事实、自己规划多步</td><td>训练数据禁决策标签；答案必须可追溯到 material</td></tr><tr><td>话痨</td><td>fill 过多、重复同一句</td><td>fill 预算 + 变体池 + 话痨率监控</td></tr><tr><td>越界承诺</td><td>&quot;马上就好&quot;&quot;一定能查到&quot;</td><td>负例集 + 越界率红线</td></tr><tr><td>数字失真</td><td>转述时改写数字</td><td>数字保真 100% 硬门槛 + 抽检</td></tr><tr><td>工具幻觉</td><td>编造工具名/参数</td><td>候选集屏蔽 + parser 单测 + 参数校验</td></tr><tr><td>SFT 后遗忘</td><td>通用口语退化</td><td>保留通用评测集 + 回归门槛</td></tr><tr><td>双通道不一致</td><td>承接语与实际结果冲突</td><td>承接语模板禁止描述内容与结论</td></tr></table>
+
+<hr>
+
+<h2>5. L4 大脑（任务执行层）</h2>
+
+<h3>5.1 职责</h3>
+
+<p>只做 L3 做不了的事：多步规划、业务系统调用、L3 风险操作、长任务与跨轮状态。</p>
+
+<h3>5.2 任务三事件</h3>
+
+<table><tr><th>事件</th><th>方向</th><th>载荷</th></tr><tr><td><code>task_start</code></td><td>L3/编排器 → L4</td><td>task_id、意图、slots、预算、可取消级别</td></tr><tr><td><code>task_progress</code></td><td>L4 → 编排器</td><td>阶段、进度、可播报的一句话（可选）</td></tr><tr><td><code>task_resume</code></td><td>L4 → L3</td><td>结论句、关键字段、是否可深挖、耗时</td></tr><tr><td><code>task_cancel</code></td><td>编排器 → L4</td><td>task_id、是否已提交（不可撤销则只停播）</td></tr></table>
+
+<h3>5.3 可插拔与权限</h3>
+
+<table><tr><th>项</th><th>做法</th></tr><tr><td>执行器</td><td>接口化，默认自研 Agent，可换 Codex / Claude Code 类执行器（Gander 同思路）</td></tr><tr><td>权限</td><td>按 L0–L3 分级；L3 操作只允许在 L4 内触发，且必须留审计</td></tr><tr><td>上下文</td><td>不向 L3 暴露全量中间状态，只回传结论句与关键字段</td></tr></table>
+
+<h3>5.4 指标</h3>
+
+<table><tr><th>指标</th><th>目标</th></tr><tr><td>任务闭环率</td><td>≥98%</td></tr><tr><td>首句回传</td><td>p95 ≤3s</td></tr><tr><td>超时率</td><td>&lt;2%</td></tr><tr><td>不可撤销操作审计完整率</td><td>100%</td></tr></table>
+
+<hr>
+
+<h2>6. 分阶段实施计划</h2>
+
+<h3>6.1 阶段划分与单变量约束</h3>
+
+<p>每个阶段只动一个变量——这是指标不达标时还能归因的前提。反例在项目里已经出现过：</p>
+<p>换模型与开工具同时上，最后说不清是模型不行还是工具链不行。</p>
+
+<h3>6.2 出口条件</h3>
+
+<table><tr><th>阶段</th><th>内容</th><th>单变量</th><th>出口条件</th></tr><tr><td>P0</td><td>编排器骨架 + 事件总线 + 埋点</td><td>不换模型、不开工具</td><td>四个基线数可测（首字/响应/无空洞/越界）</td></tr><tr><td>P1</td><td>L2 规则层 + 写操作口头确认</td><td>只加规则路由</td><td>规则覆盖率 ≥40%，误确认 0</td></tr><tr><td>P2</td><td>L2 Jev 判别接入（第二阶段）</td><td>只加判别模型</td><td>路由准确率 ≥95%、p95 ≤400ms</td></tr><tr><td>P3</td><td>L3 8B：承接语 LoRA + 转述 LoRA</td><td>只换权重</td><td>越界率 &lt;2%、数字保真 100%</td></tr><tr><td>P4</td><td>开受限工具（L0/L1，max_steps=1）</td><td>只开能力</td><td>参数准确率 ≥97%、越权 0</td></tr><tr><td>P5</td><td>L4 任务闭环 + 转述联调 + 注入加固</td><td>只接后台</td><td>闭环率 ≥98%、无空洞率 ≥95%、翻转率 &lt;10%</td></tr></table>
+
+<h3>6.3 交付物清单</h3>
+
+<table><tr><th>阶段</th><th>代码</th><th>文档</th><th>数据</th></tr><tr><td>P0</td><td>编排器、事件总线、trace 埋点</td><td>本文档 1.4 / 4.7</td><td>埋点字段表</td></tr><tr><td>P1</td><td>L2 规则表、确认流状态机</td><td>3.3 / 3.10</td><td>应答词表、写操作白名单</td></tr><tr><td>P2</td><td>判别器适配层（Jev / 自建）</td><td>3.4 / 3.5</td><td>路由评测集 300–500 条</td></tr><tr><td>P3</td><td>L3 8B 推理接口、约束解码配置</td><td>4.4 / 4.5</td><td>承接语 1,200 + 转述 2,400</td></tr><tr><td>P4</td><td>工具授权域、参数校验</td><td>3.2 / 4.4.4</td><td>工具集 2,000–3,000</td></tr><tr><td>P5</td><td>task 三事件、转述联调、注入防护</td><td>第 5 章 / 3.7</td><td>长任务集 100 条、扰动集</td></tr></table>
+
+<hr>
+
+<h2>7. 风险清单（跨层）</h2>
+
+<h3>7.1 风险与触发信号</h3>
+
+<table><tr><th>风险</th><th>影响</th><th>触发信号</th><th>对策</th></tr><tr><td>路由与 L3 职责漂移</td><td>两处都能判，日志无法归因</td><td>新增工具要改 L3 逻辑</td><td>owner 标签启动期互斥校验</td></tr><tr><td>承接语与实际结果冲突</td><td>用户信任受损</td><td>用户复问率上升</td><td>承接语禁内容、禁承诺</td></tr><tr><td>晚到事件插播</td><td>重叠/乱序播放</td><td>音频重叠告警</td><td>turn_id + seq，过期丢弃</td></tr><tr><td>层间契约变更未同步</td><td>静默降级</td><td>degraded 比例上升</td><td>schema 版本号 + 契约测试</td></tr><tr><td>数据泄露到训练集</td><td>评测虚高</td><td>评测集与训练集重叠</td><td>训练前做 n-gram 去重</td></tr><tr><td>口头确认误判</td><td>执行了用户没同意的写操作</td><td>用户当场否定 / 撤回</td><td>肯定词表 + 参数复述 + 8s 超时 + 审计日志</td></tr></table>
+
+<h3>7.2 兜底与回滚</h3>
+
+<table><tr><th>场景</th><th>兜底</th><th>回滚</th></tr><tr><td>判别模型不可用</td><td>规则层接管 + 默认 <code>dispatch</code></td><td>保留上一版权重与阈值</td></tr><tr><td>承接语生成失败</td><td>三条模板兜底，打 <code>degraded</code></td><td>关闭轮播，退回单拍</td></tr><tr><td>工具 parser 不匹配</td><td>关工具，只走直答</td><td>回滚 vLLM 启动参数</td></tr><tr><td>越界率超标</td><td>收紧负例阈值</td><td>回滚 LoRA 版本</td></tr><tr><td>时延超标</td><td>降拍数、抬高 E 阈值</td><td>回滚编排策略表</td></tr><tr><td>确认期用户沉默 / 噪声</td><td>视为未确认，8s 超时作废并播告知</td><td>回滚应答词表或收紧阈值</td></tr></table>
+
+<hr>
+
+<h2>8. 附录</h2>
+
+<h3>8.1 训练样本格式（转述示例）</h3>
+
+<pre><code>{
+  &quot;beat&quot;: &quot;narrate&quot;,
+  &quot;beat_seq&quot;: 2,
+  &quot;material&quot;: {
+    &quot;conclusion&quot;: &quot;明天郑州有雨，气温 12 到 18 度&quot;,
+    &quot;facts&quot;: [&quot;降水概率 80%&quot;, &quot;东北风 3 级&quot;]
+  },
+  &quot;said_set&quot;: [&quot;明天&quot;, &quot;郑州&quot;],
+  &quot;output&quot;: &quot;明天郑州有雨，气温十二到十八度。降水概率八成。&quot;
+}</code></pre>
+
+<h3>8.2 术语表</h3>
+
+<table><tr><th>术语</th><th>含义</th></tr><tr><td>directive</td><td>L2 输出的行动指令，不含话术</td></tr><tr><td>beat</td><td>L3 的一次产出单位（承接/进度/转述/直答/澄清）</td></tr><tr><td>fill 预算</td><td>单轮承接语的最大拍数与总时长</td></tr><tr><td>授权域</td><td>L2 下发给 L3 的可用工具集合与风险上限</td></tr><tr><td>选择性预测</td><td>按置信度阈值取舍后，覆盖量与准确率的权衡曲线</td></tr><tr><td>E</td><td>预期首字时间，编排器分档依据</td></tr></table>
+
+<h3>8.3 参考来源</h3>
+
+<li>TypeSafe AI，《Introducing System One Models &amp; Jev》（2026-09-15）与官方 docs（models / confidence / primitives）</li>
+<li>Jev 医学独立评测，arXiv:2609.34024（2026-09-27）</li>
+<li>Cisco，《Jev: Decision Models on Trial》（2026-10）</li>
+<li>JevOut，NeurIPS 2026 Agenthon（决策模型在自然上下文下的翻转率）</li>
+<li>Muennighoff et al.，Scaling Data-Constrained Language Models，arXiv:2305.16264</li>
+<li>Bohnet et al.，A Comparative Analysis of LLM Adaptation: SFT, LoRA, and ICL in Data-Scarce Scenarios，arXiv:2511.00130</li>
+<li>GRAPE，The Best Instruction-Tuning Data are Those That Fit，arXiv:2502.04194</li>
+<li>LIMA，Less Is More for Alignment，arXiv:2305.11206</li>
+<li>腾讯 Gander 技术报告，arXiv:2609.08977（本项目既有洞察见 <code>03-厂商竞品洞察/腾讯Gander/</code>）</li>
+<li>项目内既有文档：《Talker直答与工具调用方案》《快慢融合设计》《全双工状态机设计》《语义VAD方案》</li>
+
+</main></body></html>

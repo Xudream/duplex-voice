@@ -1,0 +1,228 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 714" width="1120" height="714" font-family="PingFang SC, -apple-system, Helvetica Neue, Arial, sans-serif">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475467"/>
+    </marker>
+    <marker id="arB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1d4ed8"/>
+    </marker>
+    <marker id="arG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0f766e"/>
+    </marker>
+    <filter id="sh" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#101828" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <rect width="1120" height="714" fill="#f6f7f9"/>
+  <text x="30" y="32" font-size="18" font-weight="700" fill="#101828">四层架构：语音交互 · 意图路由 · 小脑 · 大脑</text>
+  <text x="30" y="52" font-size="10.5" fill="#667085">上行为用户语音与事件，下行为播报与打断；判据：模型不做时间管理，编排器不做语义判断</text>
+
+  <!-- ================= L1 ================= -->
+  <rect x="28" y="72" width="740" height="112" rx="10" fill="#ffffff" stroke="#d0d5dd" filter="url(#sh)"/>
+  <rect x="28" y="72" width="740" height="26" rx="10" fill="#eef4ff"/>
+  <rect x="28" y="90" width="740" height="8" fill="#eef4ff"/>
+  <text x="42" y="90" font-size="12.5" font-weight="700" fill="#1d4ed8">L1　语音交互层</text>
+  <text x="754" y="90" font-size="9.5" fill="#475467" text-anchor="end">判停 300–800ms　·　全流式</text>
+
+  <g font-size="9.5" fill="#101828">
+    <rect x="44" y="110" width="166" height="58" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="56" y="128" font-weight="600">声学 VAD</text>
+    <text x="56" y="143" fill="#475467">Silero · 帧级 32ms</text>
+    <text x="56" y="157" fill="#475467">能量 + 语音概率</text>
+
+    <rect x="222" y="110" width="166" height="58" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="234" y="128" font-weight="600">语义 VAD（8 态）</text>
+    <text x="234" y="143" fill="#475467">complete / incomplete</text>
+    <text x="234" y="157" fill="#475467">reject / noise / barge_in …</text>
+
+    <rect x="400" y="110" width="166" height="58" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="412" y="128" font-weight="600">流式 ASR</text>
+    <text x="412" y="143" fill="#475467">partial 实时 · final 0.4s</text>
+    <text x="412" y="157" fill="#475467">热词 / 标点可配</text>
+
+    <rect x="578" y="110" width="174" height="58" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="590" y="128" font-weight="600">流式 TTS</text>
+    <text x="590" y="143" fill="#475467">句级合成 · 首包即播</text>
+    <text x="590" y="157" fill="#475467">不变速 · 顺序播放</text>
+  </g>
+
+  <!-- ================= L2 ================= -->
+  <rect x="28" y="200" width="740" height="126" rx="10" fill="#ffffff" stroke="#d0d5dd" filter="url(#sh)"/>
+  <rect x="28" y="200" width="740" height="26" rx="10" fill="#ecfdf3"/>
+  <rect x="28" y="218" width="740" height="8" fill="#ecfdf3"/>
+  <text x="42" y="218" font-size="12.5" font-weight="700" fill="#067647">L2　意图路由层</text>
+  <text x="754" y="218" font-size="9.5" fill="#475467" text-anchor="end">只判「本地域 / 任务域」　·　p95 ≤400ms</text>
+
+  <g font-size="9.5" fill="#101828">
+    <rect x="44" y="238" width="152" height="72" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="56" y="256" font-weight="600">① 规则判定</text>
+    <text x="56" y="271" fill="#475467">白名单 / 槽位正则</text>
+    <text x="56" y="285" fill="#475467">毫秒级 · 高精度优先</text>
+    <text x="56" y="299" fill="#98a2b3">命中即短路</text>
+
+    <rect x="208" y="238" width="158" height="72" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="220" y="256" font-weight="600">② 判别模型</text>
+    <text x="220" y="271" fill="#475467">Jev（托管）</text>
+    <text x="220" y="285" fill="#475467">或 Qwen+logits（自建）</text>
+    <text x="220" y="299" fill="#98a2b3">noul / choice / score</text>
+
+    <rect x="378" y="238" width="158" height="72" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="390" y="256" font-weight="600">③ 置信度分级</text>
+    <text x="390" y="271" fill="#475467">阈值按风险 L0–L3</text>
+    <text x="390" y="285" fill="#475467">低置信 → 上交</text>
+    <text x="390" y="299" fill="#98a2b3">默认保守，宁可慢不可错</text>
+
+    <rect x="548" y="238" width="204" height="72" rx="7" fill="#f0fdf4" stroke="#abefc6"/>
+    <text x="560" y="256" font-weight="600">④ 输出 directive</text>
+    <text x="560" y="271" fill="#344054">answer_local · tool_local</text>
+    <text x="560" y="285" fill="#344054">dispatch(task) · drop</text>
+    <text x="560" y="299" fill="#667085">+ scope / slots / budget</text>
+  </g>
+
+  <!-- ================= L3 ================= -->
+  <rect x="28" y="342" width="740" height="172" rx="10" fill="#ffffff" stroke="#d0d5dd" filter="url(#sh)"/>
+  <rect x="28" y="342" width="740" height="26" rx="10" fill="#fff6ed"/>
+  <rect x="28" y="360" width="740" height="8" fill="#fff6ed"/>
+  <text x="42" y="360" font-size="12.5" font-weight="700" fill="#b54708">L3　小脑（Talker LLM 8B）</text>
+  <text x="754" y="360" font-size="9.5" fill="#475467" text-anchor="end">只说，不判　·　首字 ≤400ms</text>
+
+  <g font-size="9.5" fill="#101828">
+    <rect x="44" y="380" width="226" height="118" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="56" y="398" font-weight="600">表达出口（talk head）</text>
+    <text x="56" y="415" fill="#475467">· 承接语（轮播，不带内容）</text>
+    <text x="56" y="430" fill="#475467">· 进度转述（每段一句）</text>
+    <text x="56" y="445" fill="#475467">· 结果转述（数字原样）</text>
+    <text x="56" y="460" fill="#475467">· 直答措辞（素材已给）</text>
+    <text x="56" y="475" fill="#475467">· 澄清话术（拒识/缺参）</text>
+    <text x="56" y="490" fill="#98a2b3" font-size="8.5">数字保真 100% · 实体去重 said_set</text>
+
+    <rect x="282" y="380" width="226" height="118" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="294" y="398" font-weight="600">受限工具闭环（授权域内）</text>
+    <text x="294" y="415" fill="#475467">allowed / max_steps=1</text>
+    <text x="294" y="430" fill="#475467">risk_ceiling ≤ L1</text>
+    <text x="294" y="445" fill="#475467">选工具 → 填参 → 执行</text>
+    <text x="294" y="460" fill="#475467">→ 收敛成一句人话</text>
+    <text x="294" y="474" fill="#98a2b3" font-size="8.5">失败只回报升级建议，不裁决派活</text>
+    <text x="294" y="488" fill="#98a2b3" font-size="8.5">解码期屏蔽未授权工具 id</text>
+
+    <rect x="520" y="380" width="232" height="118" rx="7" fill="#fffaeb" stroke="#fedf89"/>
+    <text x="532" y="398" font-weight="600">不做的事（硬边界）</text>
+    <text x="532" y="415" fill="#475467">· 不判打断 / 拒识（归 L1）</text>
+    <text x="532" y="430" fill="#475467">· 不判本地域 / 任务域（归 L2）</text>
+    <text x="532" y="445" fill="#475467">· 不看声学与播放状态</text>
+    <text x="532" y="460" fill="#475467">· 不自己规划多步任务</text>
+    <text x="532" y="478" fill="#667085" font-size="8.5">判据：输出是句子而不是指令</text>
+  </g>
+
+  <!-- ================= L4 ================= -->
+  <rect x="28" y="534" width="740" height="128" rx="10" fill="#ffffff" stroke="#d0d5dd" filter="url(#sh)"/>
+  <rect x="28" y="534" width="740" height="26" rx="10" fill="#f4f3ff"/>
+  <rect x="28" y="552" width="740" height="8" fill="#f4f3ff"/>
+  <text x="42" y="552" font-size="12.5" font-weight="700" fill="#5925dc">L4　大脑（任务执行层）</text>
+  <text x="754" y="552" font-size="9.5" fill="#475467" text-anchor="end">多步 / 业务系统 / 写操作　·　p95 ≤3s</text>
+
+  <g font-size="9.5" fill="#101828">
+    <rect x="44" y="572" width="184" height="74" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="56" y="590" font-weight="600">任务运行时</text>
+    <text x="56" y="606" fill="#475467">task_start / progress</text>
+    <text x="56" y="621" fill="#475467">task_resume / cancel</text>
+    <text x="56" y="636" fill="#98a2b3" font-size="8.5">turn 级 deadline 树</text>
+
+    <rect x="240" y="572" width="164" height="74" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="252" y="590" font-weight="600">执行器（可插拔）</text>
+    <text x="252" y="606" fill="#475467">Codex / Claude Code</text>
+    <text x="252" y="621" fill="#475467">自研 Agent</text>
+    <text x="252" y="636" fill="#98a2b3" font-size="8.5">免训练，按需替换</text>
+
+    <rect x="416" y="572" width="164" height="74" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="428" y="590" font-weight="600">业务系统 / 工具</text>
+    <text x="428" y="606" fill="#475467">L2 可逆写 · 二次确认</text>
+    <text x="428" y="621" fill="#475467">L3 有副作用 · 仅此处</text>
+    <text x="428" y="636" fill="#98a2b3" font-size="8.5">权限与审计在运行时</text>
+
+    <rect x="592" y="572" width="160" height="74" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="604" y="590" font-weight="600">长程记忆 / 规划</text>
+    <text x="604" y="606" fill="#475467">跨轮任务状态</text>
+    <text x="604" y="621" fill="#475467">结果压缩回传</text>
+    <text x="604" y="636" fill="#98a2b3" font-size="8.5">不向 L3 暴露全量</text>
+  </g>
+
+  <!-- ================= 右侧编排器 ================= -->
+  <rect x="792" y="72" width="300" height="590" rx="10" fill="#ffffff" stroke="#d0d5dd" filter="url(#sh)"/>
+  <rect x="792" y="72" width="300" height="26" rx="10" fill="#f2f4f7"/>
+  <rect x="792" y="90" width="300" height="8" fill="#f2f4f7"/>
+  <text x="806" y="90" font-size="12.5" font-weight="700" fill="#344054">会话编排器（横切）</text>
+
+  <g font-size="9.5" fill="#101828">
+    <rect x="806" y="110" width="272" height="54" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="818" y="128" font-weight="600">① 节奏控制（E 分档）</text>
+    <text x="818" y="143" fill="#475467">&lt;400ms 直答 / 400–1200ms 单拍</text>
+    <text x="818" y="157" fill="#475467">≥1200ms 轮播 / &gt;3s 升级</text>
+
+    <rect x="806" y="172" width="272" height="54" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="818" y="190" font-weight="600">② 事件总线</text>
+    <text x="818" y="205" fill="#475467">turn_id + seq 排序</text>
+    <text x="818" y="219" fill="#475467">过期事件丢弃，不插播</text>
+
+    <rect x="806" y="234" width="272" height="54" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="818" y="252" font-weight="600">③ 取消树</text>
+    <text x="818" y="267" fill="#475467">barge-in / 新指令 → cancel</text>
+    <text x="818" y="281" fill="#475467">幂等 · 可撤销级别分级</text>
+
+    <rect x="806" y="296" width="272" height="54" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="818" y="314" font-weight="600">④ 授权域下发</text>
+    <text x="818" y="329" fill="#475467">allowed_tools / risk_ceiling</text>
+    <text x="818" y="343" fill="#475467">由 L2 给，L3 只能照做</text>
+
+    <rect x="806" y="358" width="272" height="54" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="818" y="376" font-weight="600">⑤ 时延预测器</text>
+    <text x="818" y="391" fill="#475467">按 (意图, 工具) EWMA p90</text>
+    <text x="818" y="405" fill="#475467">误差 &gt;30% 退保守档</text>
+
+    <rect x="806" y="420" width="272" height="112" rx="7" fill="#f9fafb" stroke="#e4e7ec"/>
+    <text x="818" y="438" font-weight="600">⑥ 可观测（每 turn 一条 trace）</text>
+    <text x="818" y="455" fill="#475467">route / confidence / E</text>
+    <text x="818" y="470" fill="#475467">first_audio / beats / tool_ms</text>
+    <text x="818" y="485" fill="#475467">narrate_ms / interrupt / 越权</text>
+    <text x="818" y="505" fill="#98a2b3" font-size="8.5">指标全部出 p50 / p95 分布</text>
+    <text x="818" y="522" fill="#98a2b3" font-size="8.5">禁止只看平均值</text>
+  </g>
+
+  <!-- 反馈与规则 -->
+  <rect x="806" y="544" width="272" height="104" rx="7" fill="#fffaeb" stroke="#fedf89"/>
+  <text x="818" y="562" font-size="10" font-weight="600" fill="#7a2e0e">决策归位（谁该拥有这个决定）</text>
+  <g font-size="9" fill="#7a2e0e">
+    <text x="818" y="580">依赖时间 / 预算 → 编排器</text>
+    <text x="818" y="595">依赖语义 / 措辞 → L2 · L3</text>
+    <text x="818" y="610">依赖声学 / 播放 → L1</text>
+    <text x="818" y="625">依赖业务 / 权限 → L4</text>
+    <text x="818" y="641" fill="#b54708" font-size="8.5">模型不管理时间，编排器不判语义</text>
+  </g>
+
+  <!-- ================= 箭头 ================= -->
+  <!-- L1 → L2 -->
+  <line x1="398" y1="184" x2="398" y2="198" stroke="#475467" stroke-width="1.6" marker-end="url(#ar)"/>
+  <text x="406" y="195" font-size="8.5" fill="#475467">文本 + 状态事件</text>
+  <!-- L2 → L3 -->
+  <line x1="398" y1="326" x2="398" y2="340" stroke="#475467" stroke-width="1.6" marker-end="url(#ar)"/>
+  <text x="406" y="337" font-size="8.5" fill="#475467">directive</text>
+  <!-- L3 下行 → L4 -->
+  <line x1="340" y1="514" x2="340" y2="532" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#arB)"/>
+  <text x="348" y="529" font-size="8.5" fill="#1d4ed8">派活 task_start</text>
+  <!-- L4 上行 → L3 -->
+  <line x1="500" y1="534" x2="500" y2="516" stroke="#0f766e" stroke-width="1.6" marker-end="url(#arG)"/>
+  <text x="508" y="529" font-size="8.5" fill="#0f766e">task_resume 结论句</text>
+  <!-- L3 → TTS(上行) 循环：左侧返回路径 -->
+  <path d="M44 420 L16 420 L16 150 L44 150" fill="none" stroke="#b54708" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+  <!-- 打断：L1 → 编排器 -->
+  <line x1="768" y1="150" x2="790" y2="150" stroke="#b42318" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+  <text x="772" y="142" font-size="8" fill="#b42318">事件</text>
+  <!-- 编排器 → L2 / L3 / L4 虚线控制 -->
+  <line x1="790" y1="260" x2="770" y2="260" stroke="#667085" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#ar)"/>
+  <line x1="790" y1="400" x2="770" y2="400" stroke="#667085" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#ar)"/>
+  <line x1="790" y1="600" x2="770" y2="600" stroke="#667085" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#ar)"/>
+
+  <text x="30" y="682" font-size="9" fill="#98a2b3">说明：L3 只产出「话」，L2 只产出「指令」，L1 只产出「状态与文本」，L4 只产出「结果」；四层的交界处都有明确的契约与序号。</text>
+  <text x="30" y="694" font-size="8.5" fill="#98a2b3">图例：左侧橙色虚线 = 播报文本回流 TTS（承接语先出）；灰色虚线 = 编排器控制线（节奏 / 取消 / 授权）；红色虚线 = L1 事件上报。</text>
+</svg>
