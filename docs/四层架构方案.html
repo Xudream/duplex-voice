@@ -84,7 +84,7 @@
 
 <h3>2.1 组成与现状</h3>
 
-<table><tr><th>模块</th><th>实现</th><th>关键参数</th><th>状态</th></tr><tr><td>声学 VAD</td><td>Silero（帧级 32ms）</td><td>帧级门限 0.005 / 段级 0.012</td><td>已有</td></tr><tr><td>语义 VAD</td><td>自研 8 态 / Q3 4 态 / Omni 3 态</td><td>complete / incomplete / backchannel / reject / noise / tts_echo / barge_in×2</td><td>已有</td></tr><tr><td>流式 ASR</td><td>fun-asr-realtime</td><td>partial 实时、final ≈0.4s</td><td>已有</td></tr><tr><td>流式 TTS</td><td>qwen3-tts-realtime</td><td>句级合成、首包即播、不变速</td><td>已有</td></tr></table>
+<table><tr><th>模块</th><th>实现</th><th>关键参数</th><th>状态</th></tr><tr><td>声学 VAD</td><td>Silero（帧级 32ms）</td><td>帧级门限 0.005 / 段级 0.012</td><td>已有</td></tr><tr><td>语义 VAD</td><td>自研 10 态（原 8 态 + sidetalk / self_talk）</td><td>complete / incomplete / backchannel / reject / sidetalk / self_talk / noise / tts_echo / barge_in×2</td><td>已有（8 态）；sidetalk 待训</td></tr><tr><td>流式 ASR</td><td>fun-asr-realtime</td><td>partial 实时、final ≈0.4s</td><td>已有</td></tr><tr><td>流式 TTS</td><td>qwen3-tts-realtime</td><td>句级合成、首包即播、不变速</td><td>已有</td></tr></table>
 
 <h3>2.2 事件契约</h3>
 

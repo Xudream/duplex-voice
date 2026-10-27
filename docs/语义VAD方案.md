@@ -51,12 +51,16 @@
 | `barge_in_intentional` | **有意打断**（用户有内容要插） | 立即停止播放+接管 | LLM-Enhanced DM（arXiv:2502.14145） |
 | `barge_in_unintentional` | **无意打断**（回声/误触发） | 丢弃，不打断 | LLM-Enhanced DM |
 | `user_reject` | **拒识**（听不清/不理解） | 澄清请求（"没听清，再说一遍"） | **自研差异化点**（全行业 0 篇论文 0 个开源模型，2026-08 调研） |
+| `sidetalk`（2026-10 新增） | 旁对话（对旁人说，不是说给系统） | **静默 + 记上下文**，不澄清 | HumDial/SAS/VGBench，见 `sidetalk拒识洞察-2026.md` |
+| `self_talk`（2026-10 新增） | 自言自语 | 静默 | VGBench |
 
 **设计依据**：
 
 - 前 5 个继承 SoulX-Duplug（业界语义 VAD 基准）
 - 有意/无意打断拆分为 LLM-Enhanced DM 的 4 控制 token 之一——31 篇论文中**唯一**显式区分打断意图的实现——直接解决 duplex-voice 现存的"打断 vs 回声"问题
 - `user_reject` 为自研：外部基准（FDB v1.5 / SoulX-Duplug-Eval）无拒识覆盖，行业空白
+- **`sidetalk` 与 `user_reject` 动作互斥**：前者要静默、后者要澄清。若复用同一状态，系统会对着一句对旁人说的话
+  追问"没听清，再说一遍"——比不回应更糟。两者必须拆态，判据与数据需求见 `sidetalk拒识洞察-2026.md` §2.3 / §6
 
 ---
 
