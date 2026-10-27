@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>垫词设计与评测</title>
+<style>
+ body{margin:0;background:#f6f7f9;color:#101828;font-family:"PingFang SC",-apple-system,"Helvetica Neue",Arial,sans-serif;line-height:1.65}
+ main{max-width:1040px;margin:0 auto;padding:32px 28px 80px;background:#fff}
+ h1{font-size:26px;margin:8px 0 12px}
+ h2{font-size:20px;margin:34px 0 10px;padding-bottom:6px;border-bottom:2px solid #e4e7ec}
+ h3{font-size:15.5px;margin:22px 0 8px;color:#1d4ed8}
+ h4{font-size:13.5px;margin:16px 0 6px;color:#344054}
+ p{font-size:13.5px;margin:8px 0}
+ li{font-size:13.5px;margin:3px 0 3px 18px}
+ .quote{color:#475467;background:#f9fafb;border-left:3px solid #d0d5dd;padding:8px 12px;font-size:12.5px}
+ table{border-collapse:collapse;width:100%;margin:10px 0 16px;font-size:12.5px}
+ th,td{border:1px solid #e4e7ec;padding:6px 8px;text-align:left;vertical-align:top}
+ th{background:#f2f4f7;font-weight:600}
+ tr:nth-child(even) td{background:#fcfcfd}
+ pre{background:#0f172a;color:#e2e8f0;padding:12px 14px;border-radius:8px;overflow:auto;font-size:12px}
+ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+ figure{margin:14px 0 22px}
+ img{width:100%%;border:1px solid #e4e7ec;border-radius:10px;background:#fff}
+ figcaption{font-size:12px;color:#667085;text-align:center;margin-top:6px}
+ hr{border:none;border-top:1px solid #e4e7ec;margin:26px 0}
+</style></head><body><main>
+<h1>垫词设计与评测：任务闭环等待期的响应策略</h1>
+
+<p class='quote'>版本 v1.0　·　2026-10-25　·　适用对象：任务闭环型语音交互系统（ASR → 路由 → 小脑 → 大脑 → TTS）</p>
+<p class='quote'>与《四层架构方案》配套：那份定义 L3 的表达职责，本文只回答一个问题——<strong>任务结果回来之前，该说什么、怎么评</strong>。</p>
+<p class='quote'>口径约定：【论文】取自公开论文原文；【实测】为项目内真实调用；【估算】为工程推算，须实测替换。</p>
+
+<hr>
+
+<h2>1. 适用范围与结论</h2>
+
+<h3>1.1 适用场景</h3>
+
+<table><tr><th>场景</th><th>是否适用</th><th>说明</th></tr><tr><td>任务闭环慢（工具/后台 1–10s 返回）</td><td>适用</td><td>本文主场景</td></tr><tr><td>快慢双通道的承接语</td><td>适用</td><td>承接语是垫词的一种特例</td></tr><tr><td>纯闲聊（无工具、无等待）</td><td>不适用</td><td>不需要垫词，垫了反而话痨</td></tr><tr><td>长任务（&gt;30s，如订行程）</td><td>部分适用</td><td>需要&quot;进度型&quot;升级，超出本文范围</td></tr></table>
+
+<h3>1.2 四条结论</h3>
+
+<li><strong>有垫词显著优于没有</strong>：多项 2025–2026 研究一致显示垫词缩短感知等待时间【论文】。</li>
+<li><strong>上下文相关 &gt; 通用 &gt; 短促 &gt; 无</strong>：只有与当前任务对齐的垫词，才额外带来质量、融洽度、喜爱度提升与更低的恐怖谷【论文】。</li>
+<li><strong>技术型反馈会破坏体验</strong>：loading spinner 类提示降低&quot;像人&quot;的评分，把用户从社会心智模型拉到技术心智模型【论文】；语音场景对应&quot;不要让系统说自己在计算&quot;。</li>
+<li><strong>垫词必须与最终答案不冲突</strong>：冲突率是硬指标，目标 0%；同时&quot;少发&quot;本身是优化目标，不是垫得越多越好【论文】。</li>
+
+<h3>1.3 与四层架构方案的关系</h3>
+
+<table><tr><th>文档</th><th>定义</th><th>位置</th></tr><tr><td>四层架构方案 §1.4</td><td>时延预算（首字 ≤600ms 等）</td><td><code>docs/四层架构方案.md</code></td></tr><tr><td>四层架构方案 §4.7</td><td>渲染请求与 E 分档策略</td><td>同上</td></tr><tr><td><strong>本文</strong></td><td>垫词的内容规范、分层策略、评价体系与打分卡</td><td>本文档</td></tr><tr><td>L3 模型选型评测方法</td><td>模型能力评测（与垫词质量评测分开）</td><td><code>docs/L3模型选型评测方法.md</code></td></tr></table>
+
+<hr>
+
+<h2>2. 术语澄清：四种垫词</h2>
+
+<h3>2.1 功能分类</h3>
+
+<table><tr><th>类型</th><th>例子</th><th>功能</th><th>时长</th><th>误用后果</th></tr><tr><td>接收确认</td><td>&quot;好的，我看一下&quot;</td><td>告诉用户&quot;听到了&quot;</td><td>0.5–1.5s</td><td>被当成承诺（用户以为马上有结果）</td></tr><tr><td>范围复述</td><td>&quot;我查一下明天郑州的天气&quot;</td><td>证明&quot;听懂了&quot;</td><td>2–3s</td><td>复述错了比不说更糟</td></tr><tr><td>进度反馈</td><td>&quot;查到两个来源，正在核对&quot;</td><td>证明&quot;在推进&quot;</td><td>2–3s</td><td>编造进度等于说谎</td></tr><tr><td>迟疑/语气词</td><td>&quot;呃…&quot;&quot;嗯…&quot;</td><td>模拟思考过程</td><td>0.3–1s</td><td>机械模仿显得假</td></tr></table>
+
+<p>严格说，&quot;呃/嗯&quot;是 disfluency（迟疑），不是进度信息。研究里统称 filler，但<strong>它和&quot;进度播报&quot;不是一类东西</strong>：</p>
+<p>前者是韵律层的社交信号，后者是信息层的内容。二者混用会让系统显得&quot;又啰嗦又没进展&quot;。</p>
+
+<h3>2.2 常见混用与后果</h3>
+
+<table><tr><th>混用</th><th>表现</th><th>后果</th></tr><tr><td>确认当进度</td><td>只说&quot;好的&quot;，之后 5s 静默</td><td>用户以为要答了，结果干等</td></tr><tr><td>进度当确认</td><td>直接播&quot;正在调用天气接口&quot;</td><td>技术暴露 + 用户不关心</td></tr><tr><td>迟疑当缓冲</td><td>反复&quot;嗯…嗯…&quot;</td><td>显得没把握，降低信任</td></tr><tr><td>复述当答案</td><td>把用户问题重念一遍</td><td>用户重复提问或打断</td></tr></table>
+
+<p><strong>规则：一次等待最多三类垫词各出现一次，且必须按&quot;确认 → 范围 → 进度&quot;顺序推进，不能倒序或跳级。</strong></p>
+
+<hr>
+
+<h2>3. 业界研究结论</h2>
+
+<h3>3.1 有垫词显著优于无垫词【论文】</h3>
+
+<table><tr><th>研究</th><th>规模</th><th>关键结论</th></tr><tr><td>ICMI 2025《Please Let Me Think》</td><td>N=90 + N=104（两项 VR 研究）</td><td>言语垫词显著缩短感知等待时间；垫词的&quot;机器感 vs 人感&quot;对时延感知<strong>无直接影响</strong></td></tr><tr><td>ACM TAP 2026《Don&#x27;t Just Fill the Silence》</td><td>N=24，四条件对照</td><td>所有垫词类型都改善感知响应时间与估计响应时间</td></tr><tr><td>arXiv:2609.10372《PACE》</td><td>75,000 条真实请求（汽车销售机器人）</td><td>以 PTFR（感知首响应时间）为目标，级联把纯 LLM 的 P95 从 0.53s 降到 0.29s</td></tr></table>
+
+<p>含义：<strong>垫词的第一价值是&quot;时间感知&quot;，不是&quot;信息传递&quot;</strong>。不垫词时用户感知的等待会长于实际等待。</p>
+
+<h3>3.2 上下文相关 &gt; 通用 &gt; 短促 &gt; 无【论文】</h3>
+
+<p>TAP 2026 的四条件对照（无 / 短促 / 通用 / 上下文相关）：</p>
+
+<table><tr><th>条件</th><th>感知响应时间</th><th>垫词质量</th><th>融洽度 / 喜爱度</th><th>恐怖谷</th></tr><tr><td>无垫词</td><td>基线</td><td>—</td><td>基线</td><td>基线</td></tr><tr><td>短促（&quot;um&quot;）</td><td>改善</td><td>较低</td><td>略升</td><td>略升</td></tr><tr><td>通用（&quot;Let me see&quot;）</td><td>改善</td><td>中</td><td>中</td><td>中</td></tr><tr><td><strong>上下文相关</strong>（贴合当前任务）</td><td>改善</td><td><strong>最高</strong></td><td><strong>最高</strong></td><td><strong>最低</strong></td></tr></table>
+
+<p>这是目前对&quot;什么样的垫词才是好的&quot;最直接的回答：<strong>必须贴着当前任务说</strong>。</p>
+
+<h3>3.3 技术型反馈的负面效应【论文】</h3>
+
+<p>arXiv:2610.23336《Wait for It》（N=18，三种反馈对照）：</p>
+
+<li>具身手势（思考动画）&gt; 视觉 loading spinner</li>
+<li><strong>显式 spinner 反而降低&quot;像人&quot;评分、破坏沉浸</strong>，因为它把用户从社会心智模型切到技术心智模型</li>
+
+<p>语音场景的等价推论：</p>
+
+<table><tr><th>不要做</th><th>为什么</th></tr><tr><td>&quot;哔——&quot;提示音、等待音效</td><td>技术信号，暴露机器属性</td></tr><tr><td>&quot;正在加载 / 正在推理 / 调用工具中&quot;</td><td>用户不关心实现，且提醒他&quot;你在等机器&quot;</td></tr><tr><td>倒计时 / 剩余时间显示</td><td>研究显示剩余时间反馈会<strong>提高挫败感</strong>（相对已用时间反馈）【论文】</td></tr></table>
+
+<h3>3.4 垫词必须与最终答案不冲突【论文】</h3>
+
+<p>PACE 的 filler 控制器指标：</p>
+
+<table><tr><th>指标</th><th>结果</th><th>含义</th></tr><tr><td>filler–answer 冲突率</td><td><strong>0%</strong>（judged）</td><td>垫词说了 A、答案是 B 的情况必须为零</td></tr><tr><td>小模型调用减少</td><td><strong>94%</strong></td><td>只在必要时才发垫词，不是每轮都发</td></tr></table>
+
+<p>冲突的典型形态：</p>
+
+<table><tr><th>冲突</th><th>例子</th></tr><tr><td>对象冲突</td><td>垫词&quot;查一下航班&quot;，答案&quot;明天的会议改到三点&quot;</td></tr><tr><td>范围冲突</td><td>垫词&quot;只看天气&quot;，答案还报了空气质量与穿衣建议</td></tr><tr><td>动作冲突</td><td>垫词&quot;我帮您订&quot;，答案&quot;这个需要您自己确认&quot;</td></tr></table>
+
+<h3>3.5 系统级收益可量化【论文】</h3>
+
+<p>PACE 的三项收益（同一系统内）：</p>
+
+<table><tr><th>机制</th><th>效果</th></tr><tr><td>级联路由 + 垫词</td><td>P95 感知首响应 0.53s → 0.29s</td></tr><tr><td>自适应控制器</td><td>高负载下优于标准 RAG 2.4 倍以上，质量无统计差异</td></tr><tr><td>波动感知缓存</td><td>时效类问题的过期答案从 86% 降到 0%</td></tr></table>
+
+<p>含义：垫词不是孤立技巧，它和&quot;路由 + 缓存&quot;是一套组合；<strong>只做垫词、不做时延治理，收益有限</strong>。</p>
+
+<h3>3.6 研究空白</h3>
+
+<table><tr><th>空白</th><th>说明</th></tr><tr><td>中文垫词研究几乎没有</td><td>现有实验以英/日/德语场景为主</td></tr><tr><td>长任务（&gt;10s）的垫词节奏</td><td>现有研究多为 2–5s 等待窗口</td></tr><tr><td>垫词与任务失败的衔接</td><td>失败时如何收尾，未见系统研究</td></tr><tr><td>垫词的&quot;持续性&quot;指标</td><td>多拍轮播的边际收益递减点未知</td></tr></table>
+
+<hr>
+
+<h2>4. 好垫词的判据</h2>
+
+<h3>4.1 六条判据</h3>
+
+<table><tr><th>判据</th><th>要求</th><th>反例</th></tr><tr><td>相关性</td><td>与当前任务的对象/范围一致</td><td>问天气说&quot;我先看看您的日程&quot;</td></tr><tr><td>不越界</td><td>不含结论、不含承诺、不含评价</td><td>&quot;马上就好&quot;&quot;这个肯定没问题&quot;</td></tr><tr><td>信息增量</td><td>至少告诉用户&quot;在做什么/推进到哪&quot;</td><td>&quot;稍等&quot;&quot;请稍候&quot;（零信息）</td></tr><tr><td>长度匹配</td><td>8–15 字 ≈ 2–3 秒，覆盖实际等待</td><td>1–4 字（0.5s）后留 2–4s 空洞</td></tr><tr><td>可衔接</td><td>与最终答案同一套说法</td><td>垫词说&quot;查航班&quot;，答案说&quot;车次已订&quot;</td></tr><tr><td>可轮播</td><td>同场景 3–5 个变体，每 2–3 秒换一句</td><td>每次都是&quot;好的，正在为您查询&quot;</td></tr></table>
+
+<h3>4.2 两条工程约束</h3>
+
+<table><tr><th>约束</th><th>说明</th></tr><tr><td>不重复</td><td>同一轮内不重复同一句；相邻两轮不用同一变体</td></tr><tr><td>可退出</td><td>结果到达时自然交接（&quot;查到了，明天…&quot;），不说&quot;啊，结果来了&quot;这类元话语</td></tr></table>
+
+<hr>
+
+<h2>5. 建议方案</h2>
+
+<h3>5.1 分层策略（按预计等待 E 分档）</h3>
+
+<table><tr><th>预计等待 E</th><th>策略</th><th>内容</th></tr><tr><td>&lt; 400ms</td><td>不垫词</td><td>直接答（避免话痨）</td></tr><tr><td>400–1200ms</td><td>单拍</td><td>接收确认 + 范围复述</td></tr><tr><td>1200–3000ms</td><td>轮播 3 拍</td><td>确认 → 进度 → 安抚</td></tr><tr><td>&gt; 3000ms</td><td>升级</td><td>长垫词 + 明确交代 + 给&quot;先听别的&quot;的出口</td></tr></table>
+
+<p>E 的来源：按 (意图, 工具) 维度维护首字节时间的 EWMA p90；预测误差 &gt;30% 退保守档。</p>
+
+<h3>5.2 内容配方（四类模板）</h3>
+
+<table><tr><th>类型</th><th>模板</th><th>长度</th><th>使用档位</th></tr><tr><td>确认型</td><td>好的，我看一下 / 行，我来查</td><td>≤8 字</td><td>400ms 起</td></tr><tr><td>范围型</td><td>我查一下{对象}的{属性}</td><td>8–15 字</td><td>400ms 起</td></tr><tr><td>进度型</td><td>找到{数量}个来源，正在核对{维度}</td><td>10–18 字</td><td>1200ms 起</td></tr><tr><td>安抚型</td><td>这个有点慢，稍等我一下</td><td>8–12 字</td><td>&gt;3000ms</td></tr></table>
+
+<p><strong>进度型必须是真进度</strong>：不能让模型自由编造&quot;找到三个来源&quot;。可行做法只有两种：</p>
+
+<li>后台真的按阶段回报（task_progress 事件），垫词只做措辞；</li>
+<li>没有真实进度时，退化为范围型（只复述已确认的信息）。</li>
+
+<h3>5.3 三条硬禁忌</h3>
+
+<table><tr><th>禁忌</th><th>理由</th><th>替代说法</th></tr><tr><td>不承诺时间（&quot;马上/立刻/10 秒内&quot;）</td><td>一旦超时就是失信</td><td>&quot;这个要查一下&quot;</td></tr><tr><td>不剧透结论（&quot;明天有雨，我再确认下&quot;）</td><td>用户已拿到答案，垫词失去意义</td><td>&quot;正在查明天的天气&quot;</td></tr><tr><td>不解释技术（&quot;模型在推理/调用工具&quot;）</td><td>技术心智模型破坏沉浸【论文】</td><td>&quot;我核对一下&quot;</td></tr></table>
+
+<h3>5.4 生成来源与控制器</h3>
+
+<table><tr><th>优先级</th><th>来源</th><th>首字耗时</th><th>何时用</th></tr><tr><td>主路径</td><td>预合成模板池（每场景 3–5 条，离线合成）</td><td>≤150ms</td><td>第一拍一律用模板</td></tr><tr><td>增强</td><td>9B 现场生成（带 fill / progress 两种 task token）</td><td>600–900ms</td><td>第二拍起、模板命中度低时</td></tr></table>
+
+<p>控制器三条规则（对齐 PACE 的&quot;少发&quot;思路）：</p>
+
+<li>E &lt; 400ms 不发（省调用）</li>
+<li>同一轮最多 3 拍，总时长 ≤6s</li>
+<li>生成结果先过冲突检测（见 6.1），冲突即降级为通用句</li>
+
+<h3>5.5 与 L1/L2/L3 的职责边界</h3>
+
+<table><tr><th>决定</th><th>归属</th></tr><tr><td>要不要垫词、垫几拍</td><td>编排器（E 分档，确定性规则）</td></tr><tr><td>垫词说什么（措辞）</td><td>L3</td></tr><tr><td>后台真进度</td><td>L4（task_progress 事件）</td></tr><tr><td>用户是否在说、是否被打断</td><td>L1（VAD 状态）</td></tr></table>
+
+<p>L3 不判断&quot;要不要垫&quot;，也不编造进度——它只按 beat 指令把素材变成话。</p>
+
+<hr>
+
+<h2>6. 评价体系</h2>
+
+<h3>6.1 客观指标（全部可埋点）</h3>
+
+<table><tr><th>指标</th><th>定义</th><th>目标</th></tr><tr><td>PTFR（感知首响应）</td><td>用户说完 → 第一个有语义的音频包</td><td>p50 ≤600ms / p95 ≤900ms</td></tr><tr><td>filler–answer 冲突率</td><td>垫词与最终答案在对象/范围/动作上矛盾</td><td><strong>0%</strong></td></tr><tr><td>空洞率</td><td>等待期间出现 &gt;200ms 静默的轮次占比</td><td>≤5%</td></tr><tr><td>话痨率</td><td>不必要垫词（E&lt;400ms 仍垫）占比</td><td>≤10%</td></tr><tr><td>重复率</td><td>同轮重复句，或相邻轮同变体</td><td>≤5%</td></tr><tr><td>长度匹配误差</td><td>垫词时长与实际等待之差的绝对值（中位数）</td><td>≤500ms</td></tr><tr><td>越界率</td><td>含结论/承诺/评价的垫词占比</td><td>≤2%</td></tr><tr><td>垫词占比（Filler rate）</td><td>垫词轮次 / 总轮次</td><td>监控值（参照：Gander 51.6% 偏高被官方列为弱项）</td></tr></table>
+
+<p>冲突检测的可实现方式（规则优先，成本低）：</p>
+
+<pre><code>取出垫词中的实体与动作 → 与最终答案的实体/动作集合求差
+差集非空且涉及对象/范围/动作 → 标记冲突 → 降级为通用句</code></pre>
+
+<h3>6.2 主观量表（做 A/B 时照抄）</h3>
+
+<table><tr><th>量表</th><th>问法</th><th>来源</th></tr><tr><td>感知等待时间</td><td>&quot;你觉得刚才等了多久？&quot;（秒）</td><td>多项研究通用做法</td></tr><tr><td>垫词质量</td><td>1–5 Likert</td><td>TAP 2026</td></tr><tr><td>融洽度 rapport</td><td>1–5</td><td>TAP 2026</td></tr><tr><td>喜爱度 likability</td><td>1–5</td><td>TAP 2026</td></tr><tr><td>继续交互意愿</td><td>1–5</td><td>TAP 2026</td></tr><tr><td>恐怖谷</td><td>1–5（越高越不适）</td><td>TAP 2026</td></tr><tr><td>透明度</td><td>用户是否清楚系统在做什么（1–5）</td><td>ICMI 2025</td></tr></table>
+
+<h3>6.3 生成质量指标与其局限</h3>
+
+<p>若自训垫词模型，可用 arXiv:2509.20237 的指标体系：</p>
+
+<table><tr><th>指标</th><th>用途</th><th>局限</th></tr><tr><td>frequency</td><td>检验垫词频率是否接近人类</td><td>中文无公开基线</td></tr><tr><td>diversity</td><td>变体是否足够</td><td>无法判断&quot;变体是否得体&quot;</td></tr><tr><td>frequency-weighted perplexity</td><td>用词是否自然</td><td>依赖参考模型</td></tr><tr><td>BERTScore / BLEU</td><td>与参考句相似度</td><td><strong>垫词极短，噪声极大</strong>，只能抓&quot;明显崩坏&quot;</td></tr></table>
+
+<p><strong>结论：这些是代理指标，不能替代主观评分。</strong></p>
+
+<h3>6.4 打分卡（0–5 分制）</h3>
+
+<table><tr><th>维度</th><th>权重</th><th>5 分</th><th>3 分</th><th>1 分</th></tr><tr><td>D1 相关性</td><td>25%</td><td>对象/范围与任务完全一致</td><td>大致相关但不精确</td><td>说错对象或泛泛而谈</td></tr><tr><td>D2 不越界</td><td>25%</td><td>无结论、无承诺、无评价</td><td>措辞略含糊</td><td>提前给结论或承诺时间</td></tr><tr><td>D3 信息增量</td><td>15%</td><td>明确说了进度或范围</td><td>仅说了&quot;在查&quot;</td><td>纯&quot;稍等&quot;</td></tr><tr><td>D4 长度节奏</td><td>15%</td><td>与等待匹配（±0.5s）</td><td>偏差 0.5–1.5s</td><td>太短留空洞或太长拖沓</td></tr><tr><td>D5 衔接性</td><td>10%</td><td>与最终答案同一套说法、自然交接</td><td>略有跳脱</td><td>说法不一致或突兀切换</td></tr><tr><td>D6 多样性</td><td>10%</td><td>与同轮/近轮不重复</td><td>偶尔重复</td><td>每次都同一句</td></tr></table>
+
+<p>计分规则：</p>
+
+<pre><code>总分 = 0.25×D1 + 0.25×D2 + 0.15×D3 + 0.15×D4 + 0.10×D5 + 0.10×D6
+D2 为否决项：D2 = 1 时整条判不合格，不参与加权
+合格线：总分 ≥ 3.5，且 D1/D2 均 ≥ 4</code></pre>
+
+<hr>
+
+<h2>7. 验证流程（一周）</h2>
+
+<h3>7.1 实验设计</h3>
+
+<table><tr><th>日</th><th>任务</th><th>产物</th></tr><tr><td>D1</td><td>造 100 条等待场景（4 档时长 × 5 类任务，每档 25 条）</td><td><code>eval/filler_cases_v1.jsonl</code></td></tr><tr><td>D2</td><td>同一条链路上跑三种策略：无垫词 / 通用垫词 / 上下文相关垫词</td><td>三份 per-case CSV</td></tr><tr><td>D3</td><td>20 人主观评测（每条 3 人），填 §6.2 六项量表</td><td><code>subjective.csv</code></td></tr><tr><td>D4</td><td>算 §6.1 八项客观指标</td><td><code>objective.csv</code></td></tr><tr><td>D5</td><td>按 §6.4 打分卡排序，出结论</td><td><code>decision.md</code></td></tr></table>
+
+<h3>7.2 判据与决策</h3>
+
+<table><tr><th>判据</th><th>决策</th></tr><tr><td>上下文相关组各项不劣于通用组，且 D1/D5 明显更好</td><td>采用上下文相关策略</td></tr><tr><td>冲突率 &gt; 0</td><td>先修冲突检测，再谈体验优化</td></tr><tr><td>空洞率 &gt; 5%</td><td>检查长度匹配（模板是否太短）</td></tr><tr><td>话痨率 &gt; 10%</td><td>收紧 E 阈值（提高触发门槛）</td></tr></table>
+
+<h3>7.3 产物清单</h3>
+
+<table><tr><th>产物</th><th>说明</th></tr><tr><td><code>eval/filler_cases_v1.jsonl</code></td><td>场景集（冻结版本）</td></tr><tr><td><code>config/filler_templates.yaml</code></td><td>模板库（场景 × 变体）</td></tr><tr><td><code>docs/垫词设计与评测.md</code></td><td>本文档</td></tr><tr><td><code>report/decision.md</code></td><td>验证结论</td></tr></table>
+
+<hr>
+
+<h2>8. 风险与反模式</h2>
+
+<h3>8.1 五个反模式</h3>
+
+<table><tr><th>反模式</th><th>后果</th><th>纠正</th></tr><tr><td>每轮都垫</td><td>话痨，用户嫌烦</td><td>E &lt; 400ms 不发</td></tr><tr><td>垫词越长越好</td><td>拖沓，且占用回答时间</td><td>8–15 字，覆盖等待即可</td></tr><tr><td>让模型编进度</td><td>说&quot;找到三个来源&quot;但实际零结果</td><td>只播后台真进度，否则退化为范围型</td></tr><tr><td>用&quot;哔&quot;声/加载音</td><td>技术暴露，破坏沉浸</td><td>只用人声</td></tr><tr><td>承诺&quot;马上就好&quot;</td><td>超时即失信</td><td>改为&quot;这个要查一下&quot;</td></tr></table>
+
+<h3>8.2 风险与对策</h3>
+
+<table><tr><th>风险</th><th>触发信号</th><th>对策</th></tr><tr><td>垫词与答案冲突</td><td>冲突率 &gt; 0</td><td>规则比对 + 降级通用句</td></tr><tr><td>预测等待不准</td><td>空洞率高</td><td>EWMA 重估 + 退保守档</td></tr><tr><td>模板同质化</td><td>重复率高、用户复问</td><td>扩变体池 + 按场景分池</td></tr><tr><td>生成越界</td><td>越界率 &gt; 2%</td><td>负例增训 + 后置过滤</td></tr><tr><td>打断时垫词未停</td><td>打断后仍有音频</td><td>走 cancel 树，L3 停止生成</td></tr></table>
+
+<hr>
+
+<h2>9. 附录</h2>
+
+<h3>9.1 模板库（初版，按场景）</h3>
+
+<table><tr><th>场景</th><th>确认型</th><th>范围型</th><th>进度型</th><th>安抚型</th></tr><tr><td>天气</td><td>好的，我看一下</td><td>我查一下{城市}明天的天气</td><td>查到两家数据源，正在对齐</td><td>天气源有点慢，稍等</td></tr><tr><td>日程</td><td>行，我查一下</td><td>我看看您{日期}的安排</td><td>看到{数量}个日程，正在核对冲突</td><td>日程同步有点慢</td></tr><tr><td>设备控制</td><td>好的</td><td>我确认一下{房间}{设备}的状态</td><td>已连上设备，正在下发指令</td><td>设备响应慢，再等一下</td></tr><tr><td>查询类（通用）</td><td>收到</td><td>我查一下{对象}</td><td>找到{数量}条，正在筛选</td><td>这个查询有点大</td></tr><tr><td>办理类（写操作）</td><td>好的，先确认一下</td><td>我核对一下您要的{事项}</td><td>信息齐了，准备提交</td><td>系统有点慢，别急</td></tr></table>
+
+<p class='quote'>每条模板必须满足 §4.1 六条判据；变体数每场景 ≥3，且长度落在 8–15 字。</p>
+
+<h3>9.2 埋点字段表</h3>
+
+<table><tr><th>字段</th><th>类型</th><th>说明</th></tr><tr><td><code>turn_id</code></td><td>string</td><td>轮次唯一标识</td></tr><tr><td><code>e_pred_ms</code></td><td>int</td><td>预测等待时长</td></tr><tr><td><code>e_actual_ms</code></td><td>int</td><td>实际等待时长</td></tr><tr><td><code>filler_triggered</code></td><td>bool</td><td>是否触发垫词</td></tr><tr><td><code>filler_beats</code></td><td>int</td><td>实际拍数（0–3）</td></tr><tr><td><code>filler_text</code></td><td>string</td><td>播出的文本</td></tr><tr><td><code>filler_source</code></td><td>enum</td><td>template / model</td></tr><tr><td><code>filler_start_ts</code></td><td>float</td><td>首包出声时间</td></tr><tr><td><code>answer_ts</code></td><td>float</td><td>正式答案首包时间</td></tr><tr><td><code>conflict_flag</code></td><td>bool</td><td>是否与答案冲突</td></tr><tr><td><code>repeat_flag</code></td><td>bool</td><td>是否重复</td></tr><tr><td><code>interrupted</code></td><td>bool</td><td>垫词期间是否被打断</td></tr></table>
+
+<h3>9.3 参考来源</h3>
+
+<li>ICMI 2025《Please Let Me Think》（10.1145/3716553.3750792）——言语垫词缩短感知等待</li>
+<li>ACM TAP 2026《Don&#x27;t Just Fill the Silence》（10.1145/3841187）——四条件对照，上下文相关最优</li>
+<li>arXiv:2610.23336《Wait for It》——技术型反馈破坏沉浸</li>
+<li>arXiv:2609.10372《PACE》——PTFR 目标、冲突率 0%、垫词调用减少 94%</li>
+<li>arXiv:2509.20237——backchannel/filler 的表征与生成质量指标</li>
+<li>NAACL 2025《Behavior-SD》——把 filler/backchannel 作为对话行为建模</li>
+<li>本项目《四层架构方案》§1.4 / §4.7（时延预算与 E 分档）</li>
+
+</main></body></html>
