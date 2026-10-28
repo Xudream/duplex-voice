@@ -11,7 +11,7 @@
 ### 1.1 一句话结论
 
 2026 年这个问题的性质变了：不再是"能不能检测旁对话"，而是**"同一句话换个说话人，模型会不会闭嘴"**。
-现有证据给出的答案是——**端到端音频大模型基本不会闭嘴**（VGBench 测到的最高静默率 14%），
+现有证据给出的答案是——**端到端音频大模型基本不会闭嘴**（VGBench 上 6 个原生模型 + 3 种免训练适配，最高静默率仅 14%），
 必须靠独立门控或专门后训练才能到 91%。
 
 ### 1.2 成熟度（四个维度分开看）
@@ -22,7 +22,7 @@
 | 评测基准 | 体系化 | 2026 年四套并行：HumDial、CoDeTT、WearVox、VGBench【论文】 |
 | 数据 | 半成熟 | 真实录制已出现（HumDial 演员录制、SLT 106h 四通道），中文真实 sidetalk 仍缺 |
 | 方法 | 有解但不稳 | 纯音频 F1 0.86 / 音视频 0.95；端到端模型几乎不主动静默 |
-| 产品 | 早期 | 已有商用 SDK 在 STT 前判"是否对设备说"，但多只公开 F1，未公开误拒工作点 |
+| 产品 | 早期 | 已有厂商把该能力做成 pre-ASR 托管层（SAA，附客户端 SDK）；厂商页自述两条限制：分布漂移时 **fail closed**、评测以英文为主【官方】 |
 | 长时行为 | 空白 | sidetalk 的持续性（连续多轮维持静默）几乎无基准覆盖 |
 
 ### 1.3 与既有文档的关系
@@ -110,9 +110,9 @@ VGBench（arXiv:2609.32536，2026-09）：
 
 | 来源 | 规模 | 与 sidetalk 的关系 |
 |---|---|---|
-| SLT 2026 SmartGlasses Challenge（arXiv:2608.12034） | 106 小时四通道 egocentric、714 段真实场景；两条赛道（双人对话理解 / 多人会议理解），评 TSA-ASR + SLU | 多人重叠仍是主要瓶颈；中文场景 |
-| HumDial（ICASSP 2026） | 真实演员录制，非合成混合 | 拒识最好 **72.2%**，基线 **35.2%**；全体低于打断 |
-| WearVox（Meta, arXiv:2601.02391） | 3,842 条多通道眼镜录音，5 任务 | Side-Talk Rejection 任务；多通道把拒识从 **85.6% → 93.9%**（单/多通道同架构对照） |
+| SLT 2026 SmartGlasses Challenge（arXiv:2608.12034） | **中文**（Mandarin，已核实）、106 小时四通道 egocentric、714 段会话；两条赛道（双人对话理解 / 多人会议理解），评 TSA-ASR + SLU | 多人重叠仍是主要瓶颈 |
+| HumDial（ICASSP 2026） | 真实演员录制，非合成混合 | 拒识最好 **72.2%**，基线 **35.2%**；**除 Cascade（30.9% vs 28.1%，两项均极低）外均低于打断** |
+| WearVox（Meta, arXiv:2601.02391） | 3,842 条多通道眼镜录音，5 任务 | Side-Talk Rejection 任务；多通道把拒识从 **85.6% → 93.9%**（同基座单/多通道模型对照，属案例研究非通用 SOTA） |
 | CoDeTT（arXiv:2603.25434） | 18,000 条决策 / 14 类场景 / 300+ 小时中英双语 | 两种系统状态各 1,000 条 sidetalk；提出 SMR 指标 |
 | ChorusDuplex-SideTalk | 100 对话 / 1,667 轮 / 134 条 side_talk / 3.4h（每变体） | 中文专做旁对话；TTS 合成；CC-BY-4.0 |
 
@@ -124,7 +124,7 @@ VGBench（arXiv:2609.32536，2026-09）：
 
 | 资源 | 语言 | 真实/合成 | 规模 | 提供什么指标 |
 |---|---|---|---|---|
-| HumDial Track II | 中/英（演员） | 真实录制 | 拒识 4 子类，测试 ~5,000 条 | 拒识率、早期打断率、首响应延迟 |
+| HumDial Track II | 中/英（演员） | 真实录制 | 拒识 4 子类；整条赛道测试 5,000 条（其中拒识 2,000 条） | 拒识率、早期打断率、首响应延迟 |
 | CoDeTT | 中/英 | 真实+合成 | 18,000 决策 | 4 动作准确率、**SMR（语义错配率）** |
 | WearVox | 英 | 真实（AI 眼镜） | 3,842 条多通道 | 各任务准确率（含 Side-Talk Rejection） |
 | VGBench | 英 | 合成+受控 | 1,018 条 | 静默率、工具选择、回答质量 |
@@ -147,7 +147,7 @@ VGBench（arXiv:2609.32536，2026-09）：
 
 | 已解决 | 未解决 |
 |---|---|
-| 多通道/可穿戴的 sidetalk 拒识可用（93.9%） | 单通道（手机/耳机）只能到 F1 0.86 量级 |
+| 多通道/可穿戴的 sidetalk 拒识可用（93.9%，WearVox 案例研究口径） | 单通道（手机/耳机）只能到 F1 0.86 量级 |
 | 交互历史是强信号（消融 +38 点） | 端到端模型默认不肯静默（14%） |
 | 评测能区分"为什么没说"（SMR） | 误拒的代价未被建模（把指令当 sidetalk 的惩罚） |
 | 后训练可显著改善（91.3%） | 中文真实数据缺，现有为合成 |
@@ -281,10 +281,37 @@ F1 高不代表能用。产品要的是**在给定误拒预算下的拒识率**�
 
 1. arXiv:2604.08412《Selective Attention System (SAS)》——SDAR 序列路由；F1 0.86 / 0.95；去历史 0.95→0.57
 2. arXiv:2609.32536《Do Audio LLMs Listen Before They Act?》——VGBench 1,018 条；静默率 14%；VoxGate 91.3%
-3. arXiv:2608.12034《SLT 2026 SmartGlasses Challenge》——106h 四通道、714 段、TSA-ASR+SLU
+3. arXiv:2608.12034《SLT 2026 SmartGlasses Challenge》——中文（Mandarin）、106h 四通道、714 段会话、TSA-ASR+SLU
 4. arXiv:2601.02391《WearVox》——3,842 条多通道；sidetalk 拒识 85.6%→93.9%
 5. arXiv:2603.25434《CoDeTT》——18,000 决策 / 14 类 / SMR
 6. arXiv:2601.05564《ICASSP 2026 HumDial Challenge》——拒识四子类（URB/PH/TPS/SDO）；拒识 72.2% vs 基线 35.2%
-7. arXiv:2507.05609《MMW: Side Talk Rejection Multi-Microphone Whisper on Smart Glasses》——多麦低语场景
+7. arXiv:2507.05609《MMW: Side Talk Rejection Multi-Microphone Whisper on Smart Glasses》——**Whisper 指 ASR 模型架构**（不是"低语"）：多麦 Mix Block + Frame Diarization Mamba + GRPO，做穿戴者导向的 ASR 侧对话抑制；原版 Whisper 无法区分穿戴者与旁观者（WER 约 67%），MMW 降到 12%（无真值切分）/ 8%（有切分）量级【论文，小数位未取】
 8. ChorusDuplex-SideTalk（HF, CC-BY-4.0）——中文 100 对话 / 134 条 side_talk
 9. 本项目《四层架构方案》§2、《语义VAD方案》《全双工状态机设计》
+
+### 9.2 数字核对记录（2026-10-27 复核）
+
+| 论断/数字 | 出处 | 核对结果 |
+|---|---|---|
+| 纯音频 F1 0.86（P 0.89 / R 0.83） | arXiv:2604.08412 摘要 | 一致 |
+| 音视频 F1 0.95（P 0.97 / R 0.93） | 同上 | 一致 |
+| 去掉因果交互历史 F1 0.95 → 0.57±0.03 | 同上 | 一致 |
+| VGBench 1,018 条、静默率最高 14%、VoxGate 91.3%、side-talk 68.4→70.9、self-talk 52.0→60.0 | arXiv:2609.32536 摘要 | 一致 |
+| HumDial 拒识最好 72.2%、基线 35.2% | arXiv:2601.05564 表 3 | 一致 |
+| "拒识全体低于打断" | 同上表 3 | **不成立**：Cascade 30.9 > 28.1（两项均极低）→ 已改为"除 Cascade 外" |
+| 拒识四子类 URB/PH/TPS/SDO | 同上 §4 | 一致（原文：user real-time backchannels / pause handling / third-party speech / speech directed at others） |
+| 拒识测试 2,000 条（赛道共 5,000） | 同上表 1（600/600/600/200） | 一致 |
+| WearVox 3,842 条、85.6%→93.9%、61.9%→66.4% | arXiv:2601.02391 摘要与引言 | 一致；口径为同基座单/多通道案例研究 |
+| CoDeTT 18,000 条 / 14 类 / SMR / 每状态 1,000 条 sidetalk | arXiv:2603.25434 表 1、§3 | 一致 |
+| SLT 2026：106h、714 段会话、**中文** | arXiv:2608.12034 正文（出现 "Mandarin Chinese challenge"） | 一致（原文为 sessions，不是"段录音"） |
+| ChorusDuplex：100 对话 / 1,667 轮 / 134 side_talk / 3.4h / CC-BY-4.0 | HF 数据卡 v2 | 一致 |
+| MMW：原版 Whisper WER ≈67%、MMW 12%/8% | arXiv:2507.05609 正文 | 量级一致；**原文小数位未取**，故本文只写量级 |
+| SAA：pre-ASR 托管层、fail closed、英文为主 | 厂商页（同团队 arXiv:2604.08412） | 与厂商自述一致，标注【官方】 |
+
+**本轮修正的 5 处**：
+
+1. "拒识全体低于打断" → "除 Cascade 外均低于打断"（Cascade 两项都极低，属特例）
+2. "多麦低语场景" → 澄清 Whisper 指 ASR 模型架构，不是"低语"；并补 WER 量级
+3. "714 段" → "714 段会话（sessions）"
+4. "已有商用 SDK" → "pre-ASR 托管层（SAA）"，并补厂商自述的两条限制
+5. HumDial 测试规模 → 明确"赛道 5,000 条，其中拒识 2,000 条"
