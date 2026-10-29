@@ -37,13 +37,17 @@
 <p>现有证据给出的答案是——<strong>端到端音频大模型基本不会闭嘴</strong>（VGBench 上 6 个原生模型 + 3 种免训练适配，最高静默率仅 14%），</p>
 <p>必须靠独立门控或专门后训练才能到 91%。</p>
 
+<p>产品侧也不是没做，而是<strong>分成了七条路线</strong>（见 §4）：从&quot;唤醒词 + 误唤醒抑制&quot;（Apple）、&quot;免唤醒续聊 + 设备导向判定&quot;（Alexa）、</p>
+<p>参数化语义判停（OpenAI <code>semantic_vad</code>）、语义轮次 + 说话人锁定（阿里 <code>smart_turn</code>），到&quot;把时机训进模型&quot;（Gander 接管 100% / 抢话 8.0%）、</p>
+<p>空间门控（车机音区）、以及&quot;让路而非判定&quot;（AirPods 降音量）。<strong>没有一家公开误拒率</strong>——这是我们对标时最缺的口径。</p>
+
 <h3>1.2 成熟度（四个维度分开看）</h3>
 
-<table><tr><th>维度</th><th>阶段</th><th>代表证据</th></tr><tr><td>问题定义</td><td>已收敛</td><td>从&quot;单句分类&quot;转为&quot;基于交互历史的序列路由 / action-level addressedness&quot;【论文】</td></tr><tr><td>评测基准</td><td>体系化</td><td>2026 年四套并行：HumDial、CoDeTT、WearVox、VGBench【论文】</td></tr><tr><td>数据</td><td>半成熟</td><td>真实录制已出现（HumDial 演员录制、SLT 106h 四通道），中文真实 sidetalk 仍缺</td></tr><tr><td>方法</td><td>有解但不稳</td><td>纯音频 F1 0.86 / 音视频 0.95；端到端模型几乎不主动静默</td></tr><tr><td>产品</td><td>早期</td><td>已有厂商把该能力做成 pre-ASR 托管层（SAA，附客户端 SDK）；厂商页自述两条限制：分布漂移时 <strong>fail closed</strong>、评测以英文为主【官方】</td></tr><tr><td>长时行为</td><td>空白</td><td>sidetalk 的持续性（连续多轮维持静默）几乎无基准覆盖</td></tr></table>
+<table><tr><th>维度</th><th>阶段</th><th>代表证据</th></tr><tr><td>问题定义</td><td>已收敛</td><td>从&quot;单句分类&quot;转为&quot;基于交互历史的序列路由 / action-level addressedness&quot;【论文】</td></tr><tr><td>评测基准</td><td>体系化</td><td>2026 年四套并行：HumDial、CoDeTT、WearVox、VGBench【论文】</td></tr><tr><td>数据</td><td>半成熟</td><td>真实录制已出现（HumDial 演员录制、SLT 106h 四通道），中文真实 sidetalk 仍缺</td></tr><tr><td>方法</td><td>有解但不稳</td><td>纯音频 F1 0.86 / 音视频 0.95；端到端模型几乎不主动静默</td></tr><tr><td>产品</td><td>早期</td><td>七条路线已存在（§4）：Apple FTM、Alexa DDSD、OpenAI 语义判停参数、阿里 smart_turn、Gander 端到端、车机音区、AirPods 让路；无一家公开误拒率</td></tr><tr><td>长时行为</td><td>空白</td><td>sidetalk 的持续性（连续多轮维持静默）几乎无基准覆盖</td></tr></table>
 
 <h3>1.3 与既有文档的关系</h3>
 
-<table><tr><th>文档</th><th>原有内容</th><th>本文补充</th></tr><tr><td><code>语义VAD方案.md</code></td><td><code>user_reject</code> = 听不清/不理解 → 澄清</td><td><strong>sidetalk 与之动作相反</strong>：应静默、不澄清（见 §2.3）</td></tr><tr><td><code>全双工状态机设计.md</code></td><td>reject 的行为表</td><td>需拆出 sidetalk / self-talk 两个分支（见 §6）</td></tr><tr><td><code>四层架构方案.md</code> §2</td><td>L1 八个状态</td><td>状态表需扩到 10 态（见 §6.1）</td></tr></table>
+<table><tr><th>文档</th><th>原有内容</th><th>本文补充</th></tr><tr><td><code>语义VAD方案.md</code></td><td><code>user_reject</code> = 听不清/不理解 → 澄清</td><td><strong>sidetalk 与之动作相反</strong>：应静默、不澄清（见 §2.3）</td></tr><tr><td><code>全双工状态机设计.md</code></td><td>reject 的行为表</td><td>需拆出 sidetalk / self-talk 两个分支（见 §7）</td></tr><tr><td><code>四层架构方案.md</code> §2</td><td>L1 八个状态</td><td>状态表需扩到 10 态（见 §7.1）</td></tr></table>
 
 <hr>
 
@@ -100,61 +104,98 @@
 
 <hr>
 
-<h2>4. 基准与数据对照</h2>
+<h2>4. 业界产品方案</h2>
 
-<h3>4.1 六个资源横向对照</h3>
+<p>这一章回答&quot;业界产品到底怎么做拒识&quot;，只收<strong>有官方文档、论文或可验证数据</strong>的做法，纯市场宣传不进表。</p>
+
+<h3>4.1 七条已产品化的路线</h3>
+
+<table><tr><th>#</th><th>路线</th><th>代表产品 / 系统</th><th>机制（具体怎么做）</th><th>公开数据</th><th>证据等级</th></tr><tr><td>1</td><td>唤醒词 + 误唤醒抑制（FTM）</td><td>Apple Unified Acoustic Detector（设备端）</td><td>共享声学编码器 + 每种唤醒方式独立分类头；流式与非流式两版</td><td>触控唤醒场景下 FPR@99%TPR 相对改善 50%（对比单输出模型）、35%（对比每类独立模型）；优于 ASR-based FTM</td><td>论文·Apple ML</td></tr><tr><td>2</td><td>免唤醒续聊 + 设备导向判定（DDSD）</td><td>Amazon Alexa Follow-Up Mode</td><td>声学特征 + ASR 组件 + 语义/句法特征 + <strong>上一轮话语</strong></td><td>等错误率（EER）相对最佳基线改善 14%</td><td>论文（ICASSP）/官方博客</td></tr><tr><td>3</td><td>语义判停参数化（API 契约）</td><td>OpenAI Realtime API</td><td><code>turn_detection</code> 两种：<code>server_vad</code>（按静音切）/<code>semantic_vad</code>（按&quot;话说完了吗&quot;切）；<code>eagerness</code>、<code>create_response</code>、<code>interrupt_response</code>、<code>prefix_padding_ms</code>、<code>silence_duration_ms</code>；降噪分 <code>near_field</code> / <code>far_field</code></td><td>无公开数值；<strong>把语义判停做成可调参数</strong>本身就是产品决策</td><td>官方文档</td></tr><tr><td>4</td><td>语义轮次 + 说话人锁定</td><td>阿里 Qwen-Audio-3.1-Realtime</td><td><code>smart_turn</code> 融合声学与语义判轮次，&quot;嗯/啊&quot;不打断；<strong>说话人增强</strong>：传目标用户预录音频后可屏蔽旁人声音</td><td>无公开误拒率；模型侧 FD-Bench v1.5 对背景语音响应率 73%→13%</td><td>官方文档 + 论文</td></tr><tr><td>5</td><td>把时机训进模型（端到端）</td><td>腾讯 Gander（开源）、豆包 Seeduplex、GPT-Realtime</td><td>&quot;先决策、后内容&quot;解耦，回合接管/打断/搭话作为训练目标</td><td>Gander：接管 100%、抢话 8.0%；对照 GPT-Realtime 96% / 13.5%、Gemini Live 3.1 接管 78%、级联管线抢话 33%</td><td>项目报告 / 论文</td></tr><tr><td>6</td><td>空间门控（音区）</td><td>车机多音区方案（双音区→四音区）</td><td>麦克风阵列波束成形 + 声源定位，按音区归属决定响应（副驾说&quot;开窗&quot;只开副驾窗）</td><td>无统一公开指标</td><td>专利 CN109754803B / 行业分析</td></tr><tr><td>7</td><td>让路而非判定</td><td>AirPods Pro Conversation Awareness（2023 起）</td><td>检测到佩戴者开口 → 降低媒体音量、增强对面人声</td><td>无公开指标</td><td>官方发布 + 媒体实测</td></tr></table>
+
+<h3>4.2 产品里的三种门控档位</h3>
+
+<table><tr><th>档位</th><th>做法</th><th>典型形态</th><th>代价</th></tr><tr><td>A 唤醒词门控（不猜）</td><td>只有喊出唤醒词才算对设备说</td><td>电视、音箱、穿戴、车机免唤醒外的默认档</td><td>体验最差，但误收最低</td></tr><tr><td>B 语义门控（猜，猜错要兜底）</td><td>DDSD 模型判&quot;是否对设备说&quot;，不确定时轻确认</td><td>手机助手、耳机、车载续聊</td><td>需要标注数据与误拒工作点</td></tr><tr><td>C 时机内化（模型自己决定不说）</td><td>交互决策作为模型能力，端到端输出&quot;保持沉默&quot;</td><td>实时语音大模型（3.1 / Gander 一类）</td><td>最好但最难调，缺可解释性</td></tr></table>
+
+<p>公开产品基本是 <strong>A+B 或 A+C 混合</strong>，没有纯 C 量产的案例；<strong>sidetalk 长时态（旁人持续聊 30 秒以上）没有任何产品公开方案</strong>。</p>
+
+<h3>4.3 三条共性</h3>
+
+<li><strong>几乎都吃上一轮上下文</strong>：Alexa 的 DDSD 明确把前一句一起编码；这与 SAS 消融&quot;去掉交互历史 F1 从 0.95 掉到 0.57&quot;互相印证</li>
+<li><strong>都有兜底动作</strong>：不确定时不硬判——轻确认（B 档）、降低音量让路（AirPods）、按音区归属（车机）</li>
+<li><strong>&quot;是否对设备说&quot;和&quot;是否说完了&quot;是两个判断</strong>：OpenAI 的 <code>turn_detection</code> 只解决&quot;说完没有&quot;，拒识仍靠模型或上层；阿里则把两者放进 <code>smart_turn</code></li>
+
+<h3>4.4 两处分歧（我们要选边）</h3>
+
+<table><tr><th>分歧</th><th>选择 A</th><th>选择 B</th><th>我们的建议</th></tr><tr><td>判为旁人说之后怎么办</td><td>静默（sidetalk 判对就闭嘴）</td><td>让路（降音量/暂停播放，AirPods 式）</td><td><strong>静默 + 可回看</strong>：我们是手机/耳机形态，让路会打断用户自己的媒体播放</td></tr><tr><td>门控放在哪</td><td>训进模型（Gander / 阿里）</td><td>参数 + 外挂（OpenAI 给参数，门控在应用层）</td><td><strong>外挂门控 + 参数化契约</strong>：我们用云 API，没有权重，只能走这条</td></tr></table>
+
+<h3>4.5 产品侧仍空白的四件事</h3>
+
+<table><tr><th>空白</th><th>说明</th><th>对我们的影响</th></tr><tr><td>sidetalk 长时态</td><td>旁人聊了 30 秒以上，系统怎么重新锚定回用户</td><td>无参照，需自建评测</td></tr><tr><td>多人交替对系统说话</td><td>会议里 A、B 轮流问系统</td><td>无产品方案，行业仍靠唤醒词</td></tr><tr><td>电视 / 儿童噪声</td><td>Alexa 明说 TV 与小孩喊叫是最难负例</td><td>我们的负例集必须单列这两类</td></tr><tr><td>误拒指标</td><td>没有产品公开&quot;误拒率&quot;，只报准确率或 EER</td><td>我们自己定 FAR/FRR 工作点，否则无法对标</td></tr></table>
+
+<h3>4.6 对项目的四条动作</h3>
+
+<li><strong>判定输入补&quot;上一轮 + 场景&quot;</strong>：我们当前只看当前段音频，与所有产品做法都不一致</li>
+<li><strong>输出改三档</strong>（对设备说 / 旁人说 / 不确定）：不确定时走轻确认，而不是二分类硬判</li>
+<li><strong>把语义轮次与说话人锁定做成可替换接缝</strong>：与现有 <code>VadJudge</code> 同构，云 API 的 <code>smart_turn</code> 与自研实现可互换</li>
+<li><strong>竞品对标表补&quot;误唤醒 / 误拒&quot;口径</strong>：现在只有准确率，无法横向比较</li>
+
+<hr>
+
+<h2>5. 基准与数据对照</h2>
+
+<h3>5.1 六个资源横向对照</h3>
 
 <table><tr><th>资源</th><th>语言</th><th>真实/合成</th><th>规模</th><th>提供什么指标</th></tr><tr><td>HumDial Track II</td><td>中/英（演员）</td><td>真实录制</td><td>拒识 4 子类；整条赛道测试 5,000 条（其中拒识 2,000 条）</td><td>拒识率、早期打断率、首响应延迟</td></tr><tr><td>CoDeTT</td><td>中/英</td><td>真实+合成</td><td>18,000 决策</td><td>4 动作准确率、<strong>SMR（语义错配率）</strong></td></tr><tr><td>WearVox</td><td>英</td><td>真实（AI 眼镜）</td><td>3,842 条多通道</td><td>各任务准确率（含 Side-Talk Rejection）</td></tr><tr><td>VGBench</td><td>英</td><td>合成+受控</td><td>1,018 条</td><td>静默率、工具选择、回答质量</td></tr><tr><td>ChorusDuplex-SideTalk</td><td>中文</td><td>合成（TTS）</td><td>1,667 轮</td><td>逐轮 speaker attribution + 是否该静默</td></tr><tr><td>SLT 2026 SmartGlasses</td><td>中文</td><td>真实（四通道）</td><td>106h / 714 段</td><td>TSA-ASR + SLU</td></tr></table>
 
-<h3>4.2 怎么用（角色分工）</h3>
+<h3>5.2 怎么用（角色分工）</h3>
 
 <table><tr><th>角色</th><th>用哪个</th><th>用法</th></tr><tr><td>淘汰/对标</td><td>HumDial、WearVox、SLT 2026</td><td>判断自家系统在真实录制上是否明显落后</td></tr><tr><td>诊断</td><td>CoDeTT（SMR）、VGBench（静默率）</td><td>判断错在&quot;没识别出&quot;还是&quot;识别了但不肯闭嘴&quot;</td></tr><tr><td>训练数据</td><td>ChorusDuplex-SideTalk + 自建</td><td>中文合成集只够跑通链路，上产品需补真实录音</td></tr></table>
 
 <hr>
 
-<h2>5. 已解决 vs 未解决</h2>
+<h2>6. 已解决 vs 未解决</h2>
 
-<h3>5.1 一张表看清现状</h3>
+<h3>6.1 一张表看清现状</h3>
 
 <table><tr><th>已解决</th><th>未解决</th></tr><tr><td>多通道/可穿戴的 sidetalk 拒识可用（93.9%，WearVox 案例研究口径）</td><td>单通道（手机/耳机）只能到 F1 0.86 量级</td></tr><tr><td>交互历史是强信号（消融 +38 点）</td><td>端到端模型默认不肯静默（14%）</td></tr><tr><td>评测能区分&quot;为什么没说&quot;（SMR）</td><td>误拒的代价未被建模（把指令当 sidetalk 的惩罚）</td></tr><tr><td>后训练可显著改善（91.3%）</td><td>中文真实数据缺，现有为合成</td></tr><tr><td>音视频融合可到 0.95</td><td>sidetalk 持续性 / 结束后的重锚，无基准</td></tr></table>
 
-<h3>5.2 对选型的含义</h3>
+<h3>6.2 对选型的含义</h3>
 
 <table><tr><th>结论</th><th>含义</th></tr><tr><td>单通道上限约 F1 0.86</td><td>手机/耳机形态不要按&quot;零误判&quot;设计，需要&quot;轻确认&quot;兜底</td></tr><tr><td>端到端默认不肯静默</td><td>静默能力必须由独立门控保证，不能指望模型自觉</td></tr><tr><td>历史上下文是最大杠杆</td><td>判定时必带最近 3–5 轮，单句判定注定不准</td></tr><tr><td>中文真实数据缺</td><td>自建数据是必选项，不是可选项</td></tr></table>
 
 <hr>
 
-<h2>6. 对 8 态 VAD 的改造建议</h2>
+<h2>7. 对 8 态 VAD 的改造建议</h2>
 
-<h3>6.1 状态表：8 态 → 10 态</h3>
+<h3>7.1 状态表：8 态 → 10 态</h3>
 
 <table><tr><th>状态</th><th>含义</th><th>动作</th><th>相对现状</th></tr><tr><td>complete</td><td>说完了</td><td>回复</td><td>不变</td></tr><tr><td>incomplete</td><td>没说完</td><td>等待续说</td><td>不变</td></tr><tr><td>backchannel</td><td>附和</td><td>不打断、不应声</td><td>不变</td></tr><tr><td>noise</td><td>环境音</td><td>丢弃</td><td>不变</td></tr><tr><td>tts_echo</td><td>回声</td><td>忽略</td><td>不变</td></tr><tr><td>barge_in_intentional</td><td>有意打断</td><td>停播 + 接管</td><td>不变</td></tr><tr><td>barge_in_unintentional</td><td>无意打断</td><td>忽略</td><td>不变</td></tr><tr><td><strong>user_reject</strong></td><td>听不清/听不懂</td><td><strong>澄清</strong></td><td>语义收窄（只保留&quot;没听清&quot;）</td></tr><tr><td><strong>sidetalk</strong>（新）</td><td>对旁人说</td><td><strong>静默 + 记上下文</strong></td><td>新增，动作与 reject 相反</td></tr><tr><td><strong>self_talk</strong>（新）</td><td>自言自语</td><td>静默（可选：低置信时轻确认一次）</td><td>新增</td></tr></table>
 
-<h3>6.2 判定信号优先级</h3>
+<h3>7.2 判定信号优先级</h3>
 
 <table><tr><th>优先级</th><th>信号</th><th>来源</th><th>说明</th></tr><tr><td>1</td><td>交互历史</td><td>会话状态</td><td>SAS 消融证明最大杠杆（+38 点）</td></tr><tr><td>2</td><td>称呼/第二人称</td><td>ASR 文本</td><td>&quot;帮我/你/小X&quot; vs 无称呼</td></tr><tr><td>3</td><td>说话人变化</td><td>声纹/多通道方向</td><td>单通道得不到，多通道可得</td></tr><tr><td>4</td><td>声学距离感</td><td>直达/混响比</td><td>远场更可能是旁对话</td></tr><tr><td>5</td><td>语义请求性</td><td>文本</td><td>有明确请求对象才像指令</td></tr></table>
 
 <p><strong>注意顺序</strong>：文本语义排最后，因为 sidetalk 与指令同形（VGBench 的 speaker-switch 就是词完全相同）。</p>
 
-<h3>6.3 数据需求</h3>
+<h3>7.3 数据需求</h3>
 
 <table><tr><th>类别</th><th>最小条数</th><th>说明</th></tr><tr><td>sidetalk</td><td>500</td><td>双人/三人 + 快递员/电话等真实打断源；现有中文合成集仅 134 条</td></tr><tr><td>self_talk</td><td>200</td><td>自言自语、嘟囔</td></tr><tr><td>user_reject</td><td>300</td><td>听不清/噪声掩盖（现有）</td></tr><tr><td>近邻负例</td><td>每类 1:1</td><td>同一句话&quot;对系统说 vs 对旁人说&quot;配对，这是最值钱的样本</td></tr></table>
 
 <p>数据量用统一公式：<code>N = K × n_min × f_scene × f_neg</code>，语音信道系数取 2.0–3.0，负例系数 2.0。</p>
 
-<h3>6.4 服务化要点</h3>
+<h3>7.4 服务化要点</h3>
 
 <table><tr><th>项</th><th>建议</th></tr><tr><td>判定位置</td><td>L1（声学+称呼粗判）→ L2（语义+历史细判），不交给 L3</td></tr><tr><td>静默时的上下文</td><td>不要直接丢：sidetalk 里常有后续要用的信息（&quot;等会儿提醒我拿快递&quot;）</td></tr><tr><td>持续性</td><td>旁对话常连续 3–5 轮，需&quot;维持静默&quot;状态机，而不是每轮重判</td></tr><tr><td>重锚</td><td>旁对话结束后如何接回主线，交给 L3 的转述能力</td></tr></table>
 
 <hr>
 
-<h2>7. 评测指标</h2>
+<h2>8. 评测指标</h2>
 
-<h3>7.1 基础三项</h3>
+<h3>8.1 基础三项</h3>
 
 <table><tr><th>指标</th><th>定义</th><th>目标</th></tr><tr><td>拒识率（Rejection Rate）</td><td>sidetalk 样本中系统保持静默的比例</td><td>≥90%</td></tr><tr><td>误拒率（False Rejection）</td><td>真实指令被判成 sidetalk 的比例</td><td>≤2%（比拒识率更重要）</td></tr><tr><td>静默下的打断率</td><td>本应静默却开始说话的比例</td><td>≤3%</td></tr></table>
 
-<h3>7.2 理由正确性：SMR【论文】</h3>
+<h3>8.2 理由正确性：SMR【论文】</h3>
 
 <p>CoDeTT 的 Semantic Misalignment Rate：<strong>拒识对了但理由错了也算错</strong></p>
 <p>（把指令当噪声而静默，与识别出&quot;这是旁对话&quot;而静默，是两件事）。</p>
@@ -162,33 +203,33 @@
 <p>自建实现：标注每条样本的&quot;正确理由&quot;（sidetalk / self_talk / noise / backchannel），</p>
 <p>系统输出理由与标注不一致即计 SMR。目标 &lt;10%。</p>
 
-<h3>7.3 产品口径：FAR / FRR 工作点</h3>
+<h3>8.3 产品口径：FAR / FRR 工作点</h3>
 
 <p>F1 高不代表能用。产品要的是<strong>在给定误拒预算下的拒识率</strong>，因此报告：</p>
 
 <table><tr><th>报告项</th><th>说明</th></tr><tr><td>FRR@FAR=1%</td><td>误拒 1% 时能拒掉多少 sidetalk</td></tr><tr><td>曲线而非单点</td><td>与 SAS/VGBench 同类报告方式对齐</td></tr><tr><td>分类别</td><td>sidetalk / self_talk / speaker-switch 分开报</td></tr></table>
 
-<h3>7.4 持续性指标（自建，业界空白）</h3>
+<h3>8.4 持续性指标（自建，业界空白）</h3>
 
 <table><tr><th>指标</th><th>定义</th></tr><tr><td>静默保持率</td><td>连续 N 轮旁对话中，系统保持静默的轮次比例</td></tr><tr><td>重锚延迟</td><td>旁对话结束 → 系统重新对主用户发话的间隔</td></tr></table>
 
 <hr>
 
-<h2>8. 风险与开放问题</h2>
+<h2>9. 风险与开放问题</h2>
 
-<h3>8.1 风险与对策</h3>
+<h3>9.1 风险与对策</h3>
 
-<table><tr><th>风险</th><th>说明</th><th>对策</th></tr><tr><td>复用 reject 态</td><td>sidetalk 触发澄清话术</td><td>拆态（§6.1）</td></tr><tr><td>误拒指令</td><td>把真指令当旁对话，用户认为&quot;没反应&quot;</td><td>误拒率设 ≤2%，并给&quot;我在听&quot;的低成本反馈</td></tr><tr><td>只靠文本判</td><td>speaker-switch 场景必然失败</td><td>引入说话人/历史信号</td></tr><tr><td>单通道硬做</td><td>F1 上限 ~0.86</td><td>明确产品边界，或用&quot;轻确认&quot;兜底</td></tr><tr><td>丢弃 sidetalk 内容</td><td>丢掉后续有用信息</td><td>静默但入上下文</td></tr></table>
+<table><tr><th>风险</th><th>说明</th><th>对策</th></tr><tr><td>复用 reject 态</td><td>sidetalk 触发澄清话术</td><td>拆态（§7.1）</td></tr><tr><td>误拒指令</td><td>把真指令当旁对话，用户认为&quot;没反应&quot;</td><td>误拒率设 ≤2%，并给&quot;我在听&quot;的低成本反馈</td></tr><tr><td>只靠文本判</td><td>speaker-switch 场景必然失败</td><td>引入说话人/历史信号</td></tr><tr><td>单通道硬做</td><td>F1 上限 ~0.86</td><td>明确产品边界，或用&quot;轻确认&quot;兜底</td></tr><tr><td>丢弃 sidetalk 内容</td><td>丢掉后续有用信息</td><td>静默但入上下文</td></tr></table>
 
-<h3>8.2 开放问题</h3>
+<h3>9.2 开放问题</h3>
 
 <table><tr><th>#</th><th>问题</th><th>为什么重要</th></tr><tr><td>1</td><td>单通道手机形态下，历史 + 称呼能把 sidetalk 做到多少</td><td>无公开数据，直接决定产品形态可行性</td></tr><tr><td>2</td><td>误拒与误收的代价函数如何定</td><td>拒错（不回应）与答错（乱答）哪个更伤，决定阈值</td></tr><tr><td>3</td><td>长时旁对话的边际收益递减点</td><td>决定状态机维持多久、何时可以忘掉</td></tr><tr><td>4</td><td>中文真实 sidetalk 数据何时出现</td><td>决定能否摆脱合成数据的分布偏差</td></tr></table>
 
 <hr>
 
-<h2>9. 参考来源</h2>
+<h2>10. 参考来源</h2>
 
-<h3>9.1 论文与数据</h3>
+<h3>10.1 论文与数据</h3>
 
 <li>arXiv:2604.08412《Selective Attention System (SAS)》——SDAR 序列路由；F1 0.86 / 0.95；去历史 0.95→0.57</li>
 <li>arXiv:2609.32536《Do Audio LLMs Listen Before They Act?》——VGBench 1,018 条；静默率 14%；VoxGate 91.3%</li>
@@ -200,9 +241,20 @@
 <li>ChorusDuplex-SideTalk（HF, CC-BY-4.0）——中文 100 对话 / 134 条 side_talk</li>
 <li>本项目《四层架构方案》§2、《语义VAD方案》《全双工状态机设计》</li>
 
-<h3>9.2 数字核对记录（2026-10-27 复核）</h3>
+<h3>10.2 产品侧公开材料</h3>
 
-<table><tr><th>论断/数字</th><th>出处</th><th>核对结果</th></tr><tr><td>纯音频 F1 0.86（P 0.89 / R 0.83）</td><td>arXiv:2604.08412 摘要</td><td>一致</td></tr><tr><td>音视频 F1 0.95（P 0.97 / R 0.93）</td><td>同上</td><td>一致</td></tr><tr><td>去掉因果交互历史 F1 0.95 → 0.57±0.03</td><td>同上</td><td>一致</td></tr><tr><td>VGBench 1,018 条、静默率最高 14%、VoxGate 91.3%、side-talk 68.4→70.9、self-talk 52.0→60.0</td><td>arXiv:2609.32536 摘要</td><td>一致</td></tr><tr><td>HumDial 拒识最好 72.2%、基线 35.2%</td><td>arXiv:2601.05564 表 3</td><td>一致</td></tr><tr><td>&quot;拒识全体低于打断&quot;</td><td>同上表 3</td><td><strong>不成立</strong>：Cascade 30.9 &gt; 28.1（两项均极低）→ 已改为&quot;除 Cascade 外&quot;</td></tr><tr><td>拒识四子类 URB/PH/TPS/SDO</td><td>同上 §4</td><td>一致（原文：user real-time backchannels / pause handling / third-party speech / speech directed at others）</td></tr><tr><td>拒识测试 2,000 条（赛道共 5,000）</td><td>同上表 1（600/600/600/200）</td><td>一致</td></tr><tr><td>WearVox 3,842 条、85.6%→93.9%、61.9%→66.4%</td><td>arXiv:2601.02391 摘要与引言</td><td>一致；口径为同基座单/多通道案例研究</td></tr><tr><td>CoDeTT 18,000 条 / 14 类 / SMR / 每状态 1,000 条 sidetalk</td><td>arXiv:2603.25434 表 1、§3</td><td>一致</td></tr><tr><td>SLT 2026：106h、714 段会话、<strong>中文</strong></td><td>arXiv:2608.12034 正文（出现 &quot;Mandarin Chinese challenge&quot;）</td><td>一致（原文为 sessions，不是&quot;段录音&quot;）</td></tr><tr><td>ChorusDuplex：100 对话 / 1,667 轮 / 134 side_talk / 3.4h / CC-BY-4.0</td><td>HF 数据卡 v2</td><td>一致</td></tr><tr><td>MMW：原版 Whisper WER ≈67%、MMW 12%/8%</td><td>arXiv:2507.05609 正文</td><td>量级一致；<strong>原文小数位未取</strong>，故本文只写量级</td></tr><tr><td>SAA：pre-ASR 托管层、fail closed、英文为主</td><td>厂商页（同团队 arXiv:2604.08412）</td><td>与厂商自述一致，标注【官方】</td></tr></table>
+<li>Apple Machine Learning Research《Less Is More: A Unified Architecture for Device-Directed Speech Detection》——UAD/FTM，FPR@99%TPR 相对改善 50% / 35%（2026-10 核对）</li>
+<li>Amazon Science《How Alexa knows when you&#x27;re talking to her》（ICASSP 论文配套博客）——DDSD 用语义/句法 + 声学 + 上一轮话语，EER 相对改善 14%</li>
+<li>OpenAI Realtime API 文档《Voice activity detection》——<code>server_vad</code> / <code>semantic_vad</code>、<code>eagerness</code>、<code>create_response</code>、<code>interrupt_response</code>、<code>prefix_padding_ms</code>、<code>silence_duration_ms</code>；降噪 <code>near_field</code> / <code>far_field</code></li>
+<li>Google 支持页《Have a conversation with your Google smart speaker or display》——Gemini Live 支持打断；Continued Conversation（Assistant 仅美式英语）</li>
+<li>腾讯 Gander 技术报告与项目报告（本项目《腾讯Gander技术洞察报告》）——FD-Bench v3 接管 100% / 抢话 8.0%，对照 GPT-Realtime 96%/13.5%、Gemini Live 3.1 接管 78%、级联抢话 33%</li>
+<li>阿里云百炼《qwen-audio-realtime-user-guides》——<code>smart_turn</code> 语义轮次 + 说话人增强</li>
+<li>车机多音区：专利 CN109754803B《车载多音区语音交互系统及方法》+ 行业分析（双音区→四音区、波束成形、按音区响应）</li>
+<li>Apple Newsroom《AirPods redefine the personal audio experience》（2023）+ 媒体实测——Conversation Awareness 降低媒体音量、增强人声</li>
+
+<h3>10.3 数字核对记录（2026-10-27 复核，产品章节补充于 10-28）</h3>
+
+<table><tr><th>论断/数字</th><th>出处</th><th>核对结果</th></tr><tr><td>纯音频 F1 0.86（P 0.89 / R 0.83）</td><td>arXiv:2604.08412 摘要</td><td>一致</td></tr><tr><td>音视频 F1 0.95（P 0.97 / R 0.93）</td><td>同上</td><td>一致</td></tr><tr><td>去掉因果交互历史 F1 0.95 → 0.57±0.03</td><td>同上</td><td>一致</td></tr><tr><td>VGBench 1,018 条、静默率最高 14%、VoxGate 91.3%、side-talk 68.4→70.9、self-talk 52.0→60.0</td><td>arXiv:2609.32536 摘要</td><td>一致</td></tr><tr><td>HumDial 拒识最好 72.2%、基线 35.2%</td><td>arXiv:2601.05564 表 3</td><td>一致</td></tr><tr><td>&quot;拒识全体低于打断&quot;</td><td>同上表 3</td><td><strong>不成立</strong>：Cascade 30.9 &gt; 28.1（两项均极低）→ 已改为&quot;除 Cascade 外&quot;</td></tr><tr><td>拒识四子类 URB/PH/TPS/SDO</td><td>同上 §4</td><td>一致（原文：user real-time backchannels / pause handling / third-party speech / speech directed at others）</td></tr><tr><td>拒识测试 2,000 条（赛道共 5,000）</td><td>同上表 1（600/600/600/200）</td><td>一致</td></tr><tr><td>WearVox 3,842 条、85.6%→93.9%、61.9%→66.4%</td><td>arXiv:2601.02391 摘要与引言</td><td>一致；口径为同基座单/多通道案例研究</td></tr><tr><td>CoDeTT 18,000 条 / 14 类 / SMR / 每状态 1,000 条 sidetalk</td><td>arXiv:2603.25434 表 1、§3</td><td>一致</td></tr><tr><td>SLT 2026：106h、714 段会话、<strong>中文</strong></td><td>arXiv:2608.12034 正文（出现 &quot;Mandarin Chinese challenge&quot;）</td><td>一致（原文为 sessions，不是&quot;段录音&quot;）</td></tr><tr><td>ChorusDuplex：100 对话 / 1,667 轮 / 134 side_talk / 3.4h / CC-BY-4.0</td><td>HF 数据卡 v2</td><td>一致</td></tr><tr><td>MMW：原版 Whisper WER ≈67%、MMW 12%/8%</td><td>arXiv:2507.05609 正文</td><td>量级一致；<strong>原文小数位未取</strong>，故本文只写量级</td></tr><tr><td>SAA：pre-ASR 托管层、fail closed、英文为主</td><td>厂商页（同团队 arXiv:2604.08412）</td><td>与厂商自述一致，标注【官方】</td></tr><tr><td>Apple UAD：FPR@99%TPR 相对改善 50% / 35%</td><td>Apple ML 论文摘要</td><td>一致（50% 对单输出模型、35% 对每类独立模型，场景为触控唤醒）</td></tr><tr><td>Alexa DDSD：EER 相对改善 14%</td><td>Amazon Science 博客（ICASSP 论文）</td><td>一致（相对&quot;最佳基线&quot;，非绝对值）</td></tr><tr><td>Gander：接管 100% / 抢话 8.0%；GPT-Realtime 96%/13.5%；Gemini Live 3.1 接管 78%；级联抢话 33%</td><td>本项目《腾讯Gander技术洞察报告》（引 FD-Bench v3）</td><td>一致；均为 100 场景口径</td></tr><tr><td>阿里 <code>smart_turn</code> + 说话人增强；FD-Bench v1.5 背景语音响应 73%→13%</td><td>百炼用户指南 + arXiv:2609.25176 摘要</td><td>一致</td></tr><tr><td>OpenAI <code>semantic_vad</code> 参数族（<code>eagerness</code>/<code>interrupt_response</code>/<code>near_field</code>/<code>far_field</code>）</td><td>developers.openai.com《Voice activity detection》</td><td>参数名一致；<code>eagerness</code> 取值文档示例仅见 <code>auto</code>，未穷举全部档位</td></tr></table>
 
 <p><strong>本轮修正的 5 处</strong>：</p>
 
