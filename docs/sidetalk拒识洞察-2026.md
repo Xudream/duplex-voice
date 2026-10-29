@@ -14,9 +14,10 @@
 现有证据给出的答案是——**端到端音频大模型基本不会闭嘴**（VGBench 上 6 个原生模型 + 3 种免训练适配，最高静默率仅 14%），
 必须靠独立门控或专门后训练才能到 91%。
 
-产品侧也不是没做，而是**分成了七条路线**（见 §4）：从"唤醒词 + 误唤醒抑制"（Apple）、"免唤醒续聊 + 设备导向判定"（Alexa）、
-参数化语义判停（OpenAI `semantic_vad`）、语义轮次 + 说话人锁定（阿里 `smart_turn`），到"把时机训进模型"（Gander 接管 100% / 抢话 8.0%）、
-空间门控（车机音区）、以及"让路而非判定"（AirPods 降音量）。**没有一家公开误拒率**——这是我们对标时最缺的口径。
+产品侧也不是没做，而是**已经形成四层格局**（见 §4，收录 28 个模型与产品）：模型层 12 个（GPT-Live、Gemini Live、Qwen-Audio-3.1-Realtime、Gander、Seeduplex、Step-Audio 2、GLM-Realtime 等）、
+基础设施层 7 个（LiveKit 轮次检测、Pipecat Smart Turn v3、ElevenLabs、Deepgram、AssemblyAI、OpenAI `semantic_vad`、Silero）、
+产品层 9 个（ChatGPT Voice、Gemini for Home、Alexa、Siri/Apple UAD、AirPods、Ray-Ban Meta、AI Pin、车机音区、Teams）。
+**只有阿里公开了 sidetalk 量化（背景语音响应 73%→13%），没有一家公开误拒率**——这是我们对标时最缺的口径。
 
 ### 1.2 成熟度（四个维度分开看）
 
@@ -26,7 +27,7 @@
 | 评测基准 | 体系化 | 2026 年四套并行：HumDial、CoDeTT、WearVox、VGBench【论文】 |
 | 数据 | 半成熟 | 真实录制已出现（HumDial 演员录制、SLT 106h 四通道），中文真实 sidetalk 仍缺 |
 | 方法 | 有解但不稳 | 纯音频 F1 0.86 / 音视频 0.95；端到端模型几乎不主动静默 |
-| 产品 | 早期 | 七条路线已存在（§4）：Apple FTM、Alexa DDSD、OpenAI 语义判停参数、阿里 smart_turn、Gander 端到端、车机音区、AirPods 让路；无一家公开误拒率 |
+| 产品 | 早期但已成格局 | 四层收录 28 个（§4）：模型层 12（GPT-Live / Gemini Live / Qwen / Gander / Seeduplex / Step-Audio 2 / GLM-Realtime / Moshi 等）、基础设施层 7、产品层 9；仅阿里公开 sidetalk 量化，无一家公开误拒率 |
 | 长时行为 | 空白 | sidetalk 的持续性（连续多轮维持静默）几乎无基准覆盖 |
 
 ### 1.3 与既有文档的关系
@@ -122,60 +123,122 @@ VGBench（arXiv:2609.32536，2026-09）：
 
 ---
 
-## 4. 业界产品方案
+## 4. 业界产品与模型全景
 
-这一章回答"业界产品到底怎么做拒识"，只收**有官方文档、论文或可验证数据**的做法，纯市场宣传不进表。
+这一章回答"业界到底谁在做、怎么做"，按**四层**铺开：模型层（端到端实时语音模型）、基础设施层（判停/拒识组件）、产品层（消费与企业）、以及横向对比。只收有官方文档、论文或可验证事实的条目。
 
-### 4.1 七条已产品化的路线
+### 4.1 四层地图
 
-| # | 路线 | 代表产品 / 系统 | 机制（具体怎么做） | 公开数据 | 证据等级 |
+| 层 | 回答的问题 | 本文收录 | 代表 |
+|---|---|---|---|
+| A 模型层 | 模型自己能不能决定"不说" | 12 个 | GPT-Live、Gemini Live、Qwen-Audio-3.1-Realtime、Gander、Seeduplex、Step-Audio 2、GLM-Realtime |
+| B 基础设施层 | 判停/拒识怎么被工程化 | 7 个 | LiveKit 轮次检测、Pipecat Smart Turn v3、ElevenLabs、Deepgram、AssemblyAI、OpenAI semantic_vad、Silero |
+| C 产品层 | 真实产品怎么兜底 | 9 个 | ChatGPT Voice、Gemini for Home、Alexa、Siri/Apple UAD、AirPods、Ray-Ban Meta、AI Pin、车机音区、Teams |
+| D 结论 | 共性 / 分歧 / 空白 | — | 见 §4.6 |
+
+### 4.2 A 层：端到端实时语音模型（12 个）
+
+| # | 模型 / 产品 | 厂商 | 拒识与时机机制 | 公开数据 | 证据 |
 |---|---|---|---|---|---|
-| 1 | 唤醒词 + 误唤醒抑制（FTM） | Apple Unified Acoustic Detector（设备端） | 共享声学编码器 + 每种唤醒方式独立分类头；流式与非流式两版 | 触控唤醒场景下 FPR@99%TPR 相对改善 50%（对比单输出模型）、35%（对比每类独立模型）；优于 ASR-based FTM | 论文·Apple ML |
-| 2 | 免唤醒续聊 + 设备导向判定（DDSD） | Amazon Alexa Follow-Up Mode | 声学特征 + ASR 组件 + 语义/句法特征 + **上一轮话语** | 等错误率（EER）相对最佳基线改善 14% | 论文（ICASSP）/官方博客 |
-| 3 | 语义判停参数化（API 契约） | OpenAI Realtime API | `turn_detection` 两种：`server_vad`（按静音切）/`semantic_vad`（按"话说完了吗"切）；`eagerness`、`create_response`、`interrupt_response`、`prefix_padding_ms`、`silence_duration_ms`；降噪分 `near_field` / `far_field` | 无公开数值；**把语义判停做成可调参数**本身就是产品决策 | 官方文档 |
-| 4 | 语义轮次 + 说话人锁定 | 阿里 Qwen-Audio-3.1-Realtime | `smart_turn` 融合声学与语义判轮次，"嗯/啊"不打断；**说话人增强**：传目标用户预录音频后可屏蔽旁人声音 | 无公开误拒率；模型侧 FD-Bench v1.5 对背景语音响应率 73%→13% | 官方文档 + 论文 |
-| 5 | 把时机训进模型（端到端） | 腾讯 Gander（开源）、豆包 Seeduplex、GPT-Realtime | "先决策、后内容"解耦，回合接管/打断/搭话作为训练目标 | Gander：接管 100%、抢话 8.0%；对照 GPT-Realtime 96% / 13.5%、Gemini Live 3.1 接管 78%、级联管线抢话 33% | 项目报告 / 论文 |
-| 6 | 空间门控（音区） | 车机多音区方案（双音区→四音区） | 麦克风阵列波束成形 + 声源定位，按音区归属决定响应（副驾说"开窗"只开副驾窗） | 无统一公开指标 | 专利 CN109754803B / 行业分析 |
-| 7 | 让路而非判定 | AirPods Pro Conversation Awareness（2023 起） | 检测到佩戴者开口 → 降低媒体音量、增强对面人声 | 无公开指标 | 官方发布 + 媒体实测 |
+| 1 | **GPT-Live-1 / 1 mini / 1.1** | OpenAI（2026-07-08 起） | **全双工**；会用 "mhmm / yeah" 附和，也会在用户思考时**保持安静**；复杂任务后台委派给前沿模型（发布时 GPT-5.5），等待期间继续对话 | 官方描述，未公开静默率 | 官方发布（2026-07-08；1.1 增 13 音色、减少 "checking…"；07-31 起加 SynthID 水印） |
+| 2 | GPT-Realtime-2 | OpenAI | Realtime API：`server_vad` / `semantic_vad`、`interrupt_response` | 作为基线出现在 Qwen 报告（OAB 87.31 / VoiceBench 83.37 / AMC 50.33） | 官方文档 + 论文 |
+| 3 | Gemini Live（Gemini 3.x Flash / for Home） | Google | 支持打断；Continued Conversation 免唤醒续聊 | 未公开拒识率 | 官方支持页 |
+| 4 | Qwen-Audio-3.1-Realtime | 阿里 | `smart_turn` 语义轮次（"嗯/啊"不打断）+ **说话人增强**屏蔽旁人 | FD-Bench v1.5 对背景语音响应率 73%→13% | 官方文档 + arXiv:2609.25176 |
+| 5 | Qwen3.5-Omni / Qwen3.8 Omni Flash Realtime | 阿里 | 端到端，支持视频输入（眼镜/座舱形态） | 未公开 | 官方文档 + qwen-audio-agent 前端支持 |
+| 6 | Seeduplex 1.2.6.1 / 3.0 | 字节 | 端到端全双工 | Qwen 报告基线：OAB 85.38 / VoiceBench 87.43 / AMC 41.91；人格 20+ 轮 3.75（高于 Qwen 3.1 的 3.46） | 论文（Qwen 报告 Table 2/8） |
+| 7 | **Gander** | 腾讯混元（Apache-2.0 开源） | "先决策、后内容"解耦，时机训进模型 | FD-Bench v3：接管 100% / 抢话 8.0%（对照 GPT-Realtime 96%/13.5%、Gemini Live 3.1 接管 78%、级联抢话 33%） | 项目报告 |
+| 8 | Step-Audio 2 / 2 mini | 阶跃星辰（开源） | 端到端语音理解 + 生成，支持中英日与粤语、情感 | URO Bench 开源端到端最高（自报） | 官方仓库 |
+| 9 | GLM-Realtime | 智谱 | 音视频通话，2 分钟记忆，函数调用 | 音频 0.18 元/分钟、视频 1.2 元/分钟 | 官方文档 |
+| 10 | MiniCPM-o 4.5 | OpenBMB | 全模态；Gander 的基座模型 | — | 项目报告 |
+| 11 | Moshi | Kyutai（开源） | 全双工、可打断，本地部署 | 未公开拒识指标 | 官方仓库 |
+| 12 | Baichuan-Audio | 百川（开源） | 端到端中英双语实时对话 | 未单独披露拒识/打断指标 | 官方技术文 |
 
-### 4.2 产品里的三种门控档位
+### 4.3 B 层：判停与拒识的基础设施（7 个）
 
-| 档位 | 做法 | 典型形态 | 代价 |
+| # | 组件 | 提供方 | 机制 | 可调项 / 关键数字 | 证据 |
+|---|---|---|---|---|---|
+| 1 | **Turn detector model** | LiveKit Agents | 在 VAD 之上，用**语义 + 声学**预测"这一轮说完没有"，输出 `end_of_turn_probability`；另有 background voice cancellation、preemptive generation、agent 侧播报调度 | 四种模式：轮次检测模型（默认）/ 实时模型内置 / 纯 VAD / STT endpointing | 官方文档 |
+| 2 | **Smart Turn v3** | Pipecat（开源） | 直接看**原始波形**（不是转写）判断是否说完，即"语义 VAD" | Whisper Tiny 编码器 + 线性头，8M 参数，8MB int8 ONNX；v3.2 基准 31,527 条、跨多语种 | 模型卡 |
+| 3 | ElevenLabs Agents | ElevenLabs | `turn eagerness`（抢话积极度）+ 打断开关；新轮次系统用 Scribe v2 Realtime 信号 | 三档 eagerness；可关闭打断 | 官方文档 |
+| 4 | Endpointing / UtteranceEnd | Deepgram | 按静音时长切句，并用词级时间戳做"utterance end" | `endpointing`(ms)、`utterance_end_ms` | 官方文档 |
+| 5 | Turn Detection | AssemblyAI | 流式转写按"轮"输出，自带轮次边界 | 按 turn 交付，配 VAD | 官方文档 |
+| 6 | `semantic_vad` 参数族 | OpenAI | 模型判断"话说完了吗"再切 | `eagerness`、`prefix_padding_ms`、`silence_duration_ms`、`create_response`、`interrupt_response`；降噪 `near_field` / `far_field` | 官方文档 |
+| 7 | Silero VAD | 开源 | 纯声学、毫秒级 | 无语义能力，是上述方案的共同底座 | 开源项目 |
+
+### 4.4 C 层：真实产品怎么兜底（9 个）
+
+| # | 产品 | 形态 | 拒识 / 让路做法 | 结果或事故 | 证据 |
+|---|---|---|---|---|---|
+| 1 | ChatGPT Voice（GPT-Live） | 手机/桌面 | 全双工会附和也会沉默；复杂任务后台跑、前台继续聊 | 官方未公布静默率 | 官方发布 |
+| 2 | Gemini for Home / Google Assistant | 音箱、屏 | Continued Conversation 免唤醒续聊；Gemini Live 支持打断 | Continued Conversation 在 Google Assistant 上仅美式英语 | 官方支持页 |
+| 3 | Alexa（Follow-Up Mode） | 音箱 | DDSD：声学 + ASR + 语义/句法 + **上一轮话语** | EER 相对最佳基线改善 14% | ICASSP 论文 / 官方博客 |
+| 4 | Siri + Apple UAD | 手机/手表/HomePod | 误唤醒抑制（FTM）：共享声学编码器 + 每种唤醒方式独立分类头 | 触控唤醒场景 FPR@99%TPR 相对改善 50% / 35% | Apple ML 论文 |
+| 5 | AirPods Conversation Awareness | 耳机 | **让路**：检测佩戴者开口 → 降媒体音量、增强人声 | 无公开指标 | Apple 2023 发布 + 媒体实测 |
+| 6 | Ray-Ban Meta（Hey Meta） | 眼镜 | 唤醒词门控 + Conversation focus（增强面对面人声） | **2026-10 事故**：无唤醒词也录音，用户发现后官方修复 | 官方发布说明 + Ars Technica（2026-10-16） |
+| 7 | Humane AI Pin | 穿戴（无屏） | 以常听 + 触控为主，不做唤醒词 | **失败案例**：2025-02 停止销售、服务关停，HP 以 1.16 亿美元收购 | 多家媒体（2025-02） |
+| 8 | 车机多音区（双音区→四音区） | 车载 | 波束成形 + 声源定位，按音区归属响应（副驾说"开窗"只开副驾窗） | 无统一指标 | 专利 CN109754803B + 行业分析 |
+| 9 | Microsoft Teams / 会议 | 会议 | voice isolation 降噪 + **声纹注册做说话人归属**（speaker recognition） | 无公开拒识率 | 官方支持文档 |
+
+### 4.5 三张横向对比
+
+**（一）模型层：谁真的会"闭嘴"**
+
+| 能力 | 有明确机制 | 有公开数字 | 备注 |
 |---|---|---|---|
-| A 唤醒词门控（不猜） | 只有喊出唤醒词才算对设备说 | 电视、音箱、穿戴、车机免唤醒外的默认档 | 体验最差，但误收最低 |
-| B 语义门控（猜，猜错要兜底） | DDSD 模型判"是否对设备说"，不确定时轻确认 | 手机助手、耳机、车载续聊 | 需要标注数据与误拒工作点 |
-| C 时机内化（模型自己决定不说） | 交互决策作为模型能力，端到端输出"保持沉默" | 实时语音大模型（3.1 / Gander 一类） | 最好但最难调，缺可解释性 |
+| 语义判停（说完没有） | GPT-Live、Gemini Live、Qwen、Gander、Step-Audio | 部分 | 已是标配 |
+| 拒绝旁人语音（sidetalk） | Qwen（说话人增强）、Gander（时机内化） | Qwen：背景语音响应 73%→13% | **只有阿里给了量化** |
+| 主动附和（backchannel） | GPT-Live（"mhmm/yeah"）、Gander（Filler 51.6%） | Gander 有 | 附和多≠体验好，Gander Filler 偏高被列为弱项 |
+| 沉默等待（用户思考时不抢话） | GPT-Live（"stay quiet"） | 无 | 全靠产品体感 |
+| 前后台并行（边等边聊） | GPT-Live（委派前沿模型）、Qwen Voice Harness | Qwen Harness：91.04% 路由成功率 | 两家都这么做，说明是方向 |
 
-公开产品基本是 **A+B 或 A+C 混合**，没有纯 C 量产的案例；**sidetalk 长时态（旁人持续聊 30 秒以上）没有任何产品公开方案**。
+**（二）基础设施层：判停的四代做法**
 
-### 4.3 三条共性
-
-1. **几乎都吃上一轮上下文**：Alexa 的 DDSD 明确把前一句一起编码；这与 SAS 消融"去掉交互历史 F1 从 0.95 掉到 0.57"互相印证
-2. **都有兜底动作**：不确定时不硬判——轻确认（B 档）、降低音量让路（AirPods）、按音区归属（车机）
-3. **"是否对设备说"和"是否说完了"是两个判断**：OpenAI 的 `turn_detection` 只解决"说完没有"，拒识仍靠模型或上层；阿里则把两者放进 `smart_turn`
-
-### 4.4 两处分歧（我们要选边）
-
-| 分歧 | 选择 A | 选择 B | 我们的建议 |
+| 代 | 做法 | 代表 | 代价 |
 |---|---|---|---|
-| 判为旁人说之后怎么办 | 静默（sidetalk 判对就闭嘴） | 让路（降音量/暂停播放，AirPods 式） | **静默 + 可回看**：我们是手机/耳机形态，让路会打断用户自己的媒体播放 |
-| 门控放在哪 | 训进模型（Gander / 阿里） | 参数 + 外挂（OpenAI 给参数，门控在应用层） | **外挂门控 + 参数化契约**：我们用云 API，没有权重，只能走这条 |
+| 一 | 纯 VAD 静音阈值 | Silero、厂商 VAD | 说慢了就误判说完 |
+| 二 | STT endpointing | Deepgram、AssemblyAI | 受转写质量牵制 |
+| 三 | 语义/声学融合模型 | LiveKit turn detector、Pipecat Smart Turn v3、OpenAI semantic_vad、阿里 smart_turn | 需要模型与语种覆盖 |
+| 四 | 训进端到端模型 | Gander、GPT-Live、Qwen 3.1 | 最难调、最不可解释 |
 
-### 4.5 产品侧仍空白的四件事
+**（三）产品层：判为"旁人说"之后怎么办**
 
-| 空白 | 说明 | 对我们的影响 |
+| 动作 | 代表 | 适用形态 |
 |---|---|---|
-| sidetalk 长时态 | 旁人聊了 30 秒以上，系统怎么重新锚定回用户 | 无参照，需自建评测 |
-| 多人交替对系统说话 | 会议里 A、B 轮流问系统 | 无产品方案，行业仍靠唤醒词 |
-| 电视 / 儿童噪声 | Alexa 明说 TV 与小孩喊叫是最难负例 | 我们的负例集必须单列这两类 |
-| 误拒指标 | 没有产品公开"误拒率"，只报准确率或 EER | 我们自己定 FAR/FRR 工作点，否则无法对标 |
+| 静默（不说话） | Qwen / Gander 的模型内决策 | 手机、耳机、眼镜 |
+| 让路（降音量/暂停） | AirPods Conversation Awareness、Ray-Ban Conversation focus | 耳机、眼镜（用户正在听/正面对面聊） |
+| 归属到人（按音区/声纹） | 车机四音区、Teams 说话人归属 | 车载、会议 |
+| 轻确认（追问一次） | 通用 B 档做法 | 客服、任务型场景 |
 
-### 4.6 对项目的四条动作
+### 4.6 结论：共性、分歧、空白与动作
 
-1. **判定输入补"上一轮 + 场景"**：我们当前只看当前段音频，与所有产品做法都不一致
-2. **输出改三档**（对设备说 / 旁人说 / 不确定）：不确定时走轻确认，而不是二分类硬判
-3. **把语义轮次与说话人锁定做成可替换接缝**：与现有 `VadJudge` 同构，云 API 的 `smart_turn` 与自研实现可互换
-4. **竞品对标表补"误唤醒 / 误拒"口径**：现在只有准确率，无法横向比较
+**三条共性**
+
+1. **都吃上一轮上下文**：Alexa 的 DDSD 明确编码前一句；与 SAS 消融"去掉历史 F1 从 0.95 掉到 0.57"互证
+2. **都有兜底动作**：静默、让路、归属、轻确认——没有产品把"二分类硬判"当终点
+3. **"是否对设备说"与"是否说完了"是两个判断**：OpenAI 的 `turn_detection` 只管说完，拒识靠模型或上层；阿里把两者合进 `smart_turn`
+
+**两处必须选边的分歧**
+
+| 分歧 | 选项 A | 选项 B | 我们的选择 |
+|---|---|---|---|
+| 判为旁人说之后 | 静默 | 让路（降音量） | **静默 + 可回看**（我们是手机/耳机，让路会打断用户自己的播放） |
+| 门控放哪 | 训进模型（Gander / 阿里） | 参数 + 外挂（OpenAI、LiveKit、Pipecat） | **外挂门控 + 参数化契约**（用云 API 没有权重） |
+
+**四个空白（产品侧真没人做好）**
+
+| 空白 | 说明 | 对我们的含义 |
+|---|---|---|
+| sidetalk 长时态 | 旁人连聊 30 秒以上如何重新锚定，无任何产品公开方案 | 只能自建评测 |
+| 多人交替对系统说 | 会议里 A、B 轮流提问 | 行业仍靠唤醒词 |
+| 电视 / 儿童噪声 | Alexa 明说 TV 与小孩喊叫是最难负例 | 负例集必须单列这两类 |
+| 误拒指标 | 无一家公开误拒率，只报准确率或 EER | 自己定 FAR/FRR 工作点，否则无法对标 |
+
+**四条动作**
+
+1. **判定输入补"上一轮 + 场景"**：我们当前只看当前段音频，与所有玩家都不一致
+2. **输出改三档**（对设备说 / 旁人说 / 不确定），不确定走轻确认，不硬判
+3. **把语义轮次与说话人锁定做成可替换接缝**：与现有 `VadJudge` 同构，云 API 的 `smart_turn`、LiveKit 的 turn detector、Pipecat Smart Turn 可互换
+4. **对标表补"误唤醒 / 误拒"口径**：并加一条产品事故维度（Ray-Ban 2026-10 无唤醒词录音、AI Pin 关服）
 
 ---
 
@@ -360,6 +423,16 @@ F1 高不代表能用。产品要的是**在给定误拒预算下的拒识率**�
 6. 阿里云百炼《qwen-audio-realtime-user-guides》——`smart_turn` 语义轮次 + 说话人增强
 7. 车机多音区：专利 CN109754803B《车载多音区语音交互系统及方法》+ 行业分析（双音区→四音区、波束成形、按音区响应）
 8. Apple Newsroom《AirPods redefine the personal audio experience》（2023）+ 媒体实测——Conversation Awareness 降低媒体音量、增强人声
+9. OpenAI《Introducing GPT-Live》（2026-07-08）——全双工、会附和也会沉默、复杂任务后台委派 GPT-5.5；1.1 版增 13 音色；07-31 起 SynthID 水印
+10. LiveKit 文档《Turns overview》——轮次检测四模式（turn detector 模型 / 实时模型内置 / 纯 VAD / STT endpointing），`end_of_turn_probability`
+11. Pipecat《Smart Turn v3》模型卡——波形输入、Whisper Tiny 编码器 + 线性头、8M 参数、8MB int8 ONNX、v3.2 基准 31,527 条跨多语种
+12. ElevenLabs 文档——`turn eagerness` 与打断开关，新轮次系统用 Scribe v2 Realtime 信号
+13. Deepgram《Endpointing》《Utterance End》、AssemblyAI《Turn Detection》——判停参数化
+14. 阶跃星辰 Step-Audio / Step-Audio 2 mini 官方仓库——端到端、开源、支持中英日与粤语
+15. 智谱《GLM-Realtime》官方文档——音视频通话、2 分钟记忆、0.18 元/分钟（音频）
+16. Meta《AI glasses release notes》Conversation focus + Ars Technica（2026-10-16）《Ray-Ban Meta glasses found recording audio without wearer's consent》
+17. Humane AI Pin 关停：2025-02 停止销售、服务关停，HP 以 1.16 亿美元收购（多家媒体）
+18. Microsoft Teams《voice isolation》《voice and face recognition》——降噪 + 声纹注册做说话人归属
 
 ### 10.3 数字核对记录（2026-10-27 复核，产品章节补充于 10-28）
 
@@ -384,6 +457,14 @@ F1 高不代表能用。产品要的是**在给定误拒预算下的拒识率**�
 | Gander：接管 100% / 抢话 8.0%；GPT-Realtime 96%/13.5%；Gemini Live 3.1 接管 78%；级联抢话 33% | 本项目《腾讯Gander技术洞察报告》（引 FD-Bench v3） | 一致；均为 100 场景口径 |
 | 阿里 `smart_turn` + 说话人增强；FD-Bench v1.5 背景语音响应 73%→13% | 百炼用户指南 + arXiv:2609.25176 摘要 | 一致 |
 | OpenAI `semantic_vad` 参数族（`eagerness`/`interrupt_response`/`near_field`/`far_field`） | developers.openai.com《Voice activity detection》 | 参数名一致；`eagerness` 取值文档示例仅见 `auto`，未穷举全部档位 |
+| GPT-Live：全双工、会附和也会沉默、委派 GPT-5.5、2026-07-08 发布 | OpenAI《Introducing GPT-Live》 | 一致（"stay quiet when you need a moment to think"原文）；静默率未公开 |
+| LiveKit：轮次检测四模式，turn detector 为默认 | LiveKit《Turns overview》 | 一致 |
+| Smart Turn v3：8M 参数 / 8MB int8 / v3.2 基准 31,527 条 | HF 模型卡 | 一致（模型卡原文） |
+| Seeduplex 1.2.6.1：OAB 85.38 / VoiceBench 87.43 / AMC 41.91 / 20+ 轮 3.75 | Qwen 报告 Table 2/8 | 一致（同一协议下基线） |
+| Step-Audio 2 mini：2025-09 开源，中英日 + 粤语 | 阶跃官方仓库 | 一致；"URO Bench 开源最高"为自报 |
+| GLM-Realtime：音频 0.18 元/分钟 | 智谱官方文档 | 一致（另有视频档 1.2 元/分钟） |
+| Ray-Ban Meta：2026-10 无唤醒词录音并修复 | Ars Technica 2026-10-16 等 | 一致（官方承认并修复） |
+| Humane AI Pin：2025-02 停售关服、HP 1.16 亿美元收购 | 多家媒体 | 一致 |
 
 **本轮修正的 5 处**：
 
