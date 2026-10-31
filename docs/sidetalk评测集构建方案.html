@@ -1,0 +1,346 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>sideTalk 拒识 · 评测集构建方案</title><style>
+body{font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif;max-width:1080px;margin:32px auto;padding:0 20px;line-height:1.65;color:#1f2328;background:#fff}
+h1{font-size:26px;border-bottom:2px solid #e5e7eb;padding-bottom:8px}
+h2{font-size:21px;margin-top:32px;border-left:4px solid #2563eb;padding-left:10px}
+h3{font-size:17px;margin-top:22px;color:#111827}
+h4{font-size:15px;color:#374151}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+th,td{border:1px solid #d1d5db;padding:6px 9px;text-align:left;vertical-align:top}
+th{background:#f3f4f6;font-weight:600}
+code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12.5px}
+pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:8px;overflow-x:auto;font-size:12.5px}
+pre code{background:none;color:inherit;padding:0}
+blockquote{border-left:4px solid #cbd5e1;margin:10px 0;padding:2px 14px;color:#4b5563}
+hr{border:none;border-top:1px solid #e5e7eb;margin:26px 0}
+</style></head><body><h1>sideTalk 拒识评测集构建方案</h1>
+<p>&gt; 配套文档：《拒识sideTalk设计文档.md》（场景定义、模块边界、指标口径以其 §1.3 为准）</p>
+<p>&gt; 版本：v1.0　｜　更新：2026-10-31</p>
+<p>&gt; 用途：<strong>模型选型（淘汰赛）+ 立项验收</strong>两件事共用一套尺子</p>
+<p>&gt; 口径纪律：本文所有外部数字均标注来源；未标注者不得进入评审材料</p>
+<hr/>
+<h2>1. 目的与边界</h2>
+<h3>1.1 这份文档解决什么</h3>
+<p>《拒识sideTalk设计文档》定义了&quot;要判什么&quot;（S1–S4 归属问题）和&quot;判到什么程度&quot;（分场景目标），但没有回答三个工程问题：</p>
+<table><thead><tr><th>问题</th><th>本文给出的答案</th></tr></thead><tbody>
+<tr><td>用哪些数据、各多少条？</td><td>§2 资源清单 + §3 公开集映射 + §4 自建集配额</td></tr>
+<tr><td>模型之间怎么比才可信？</td><td>§6 统计口径（CI、McNemar、工作点曲线）</td></tr>
+<tr><td>谁来跑、跑出什么？</td><td>§5 harness 规格 + §8 排期与交付物</td></tr>
+</tbody></table>
+<h3>1.2 两把尺子的分工</h3>
+<table><thead><tr><th>尺子</th><th>数据</th><th>用途</th><th>决策权</th></tr></thead><tbody>
+<tr><td>尺子 1（公开集）</td><td>HumDial-FDBench、CoDeTT、WearVox、ChorusDuplex</td><td><strong>淘汰赛</strong>：把 8–10 个候选模型筛到 2 个</td><td>只做淘汰，不做最终定选</td></tr>
+<tr><td>尺子 2（自建集）</td><td>音箱远场 + 手机近场实测</td><td><strong>定选 + 验收</strong>：中文真实声学、S1 主场景</td><td>最终结论以尺子 2 为准</td></tr>
+</tbody></table>
+<p>理由：公开集覆盖面广但形态不对（英文/眼镜/合成），自建集贴产品但规模小、拿不到业界坐标。两者互补，不可互相替代。</p>
+<h3>1.3 三条口径纪律</h3>
+<ol><li><strong>dev/test 隔离</strong>：任何 prompt、阈值、规则调参只能碰 dev；test 只在最终表报一次，触碰即该版本 test 作废。</li><li><strong>只报分布不报单点</strong>：所有指标给点值 + 95% 置信区间；差异小于 CI 宽度时不写&quot;优于&quot;。</li><li><strong>一票否决不参与加权</strong>：误执行（应静默却触发工具）恒为 0，不做加权平均，出现即淘汰。</li></ol>
+<hr/>
+<h2>2. 评测集总览</h2>
+<h3>2.1 公开集清单</h3>
+<table><thead><tr><th>集</th><th>语言</th><th>真实/合成</th><th>可用条数（进 sideTalk 指标）</th><th>获取</th><th>许可</th></tr></thead><tbody>
+<tr><td>HumDial-FDBench（Track II）</td><td>中/英双语</td><td>真实录制（双通道）</td><td>拒识 test 2,000（SDO 200 / TPS 600）+ dev 800</td><td>HuggingFace <code>ASLP-lab/HumDial-FDBench</code>，仓库含 <code>Humdial-Track2-Test.zip</code></td><td>Apache-2.0</td></tr>
+<tr><td>CoDeTT</td><td>中/英</td><td>真实+合成</td><td>SideTalk 子集约 2,000（待解压核对）</td><td>HuggingFace <code>YingaoWang-casia/CoDeTT</code>（单包 <code>CoDeTT.lz4</code>）</td><td>见仓库</td></tr>
+<tr><td>WearVox</td><td>英</td><td>真实（AI 眼镜，多通道）</td><td>582 负例 + 500 正例</td><td>HuggingFace <code>zlinao/WearVox</code></td><td>见仓库</td></tr>
+<tr><td>ChorusDuplex-SideTalk</td><td>中文</td><td>合成（TTS，clean + babble 双版）</td><td>side_talk 134 轮 + third_party 轮</td><td>HuggingFace <code>BiggestWave/ChorusDuplex-SideTalk</code>（CC BY 4.0，babble 版需保留 VOiCES 归属）</td><td>CC BY 4.0</td></tr>
+<tr><td>VGBench</td><td>英</td><td>合成+受控</td><td><strong>0（数据未公开）</strong></td><td>仅论文 arXiv:2609.32536</td><td>—</td></tr>
+<tr><td>SLT 2026 SmartGlasses</td><td>中文</td><td>真实（四通道）</td><td>Dev 抽样 50 段（仅诊断）</td><td>注册表单 → 邮件发放</td><td>挑战赛协议</td></tr>
+</tbody></table>
+<h3>2.2 合计规模与统计功效</h3>
+<table><thead><tr><th>用途</th><th>样本量</th><th>指标假设</th><th>95% CI 半宽</th><th>能分辨的最小模型差异</th></tr></thead><tbody>
+<tr><td>CoDeTT SideTalk（选型主分辨器）</td><td>~2,000</td><td>p=0.90</td><td>±1.3 pt</td><td>~3 pt</td></tr>
+<tr><td>HumDial 拒识 test（对外坐标）</td><td>2,000（SDO 仅 200 / TPS 600）</td><td>p=0.90</td><td>SDO ±4.2 pt / TPS ±2.4 pt</td><td>SDO 上 ~8 pt</td></tr>
+<tr><td>WearVox（眼镜参考）</td><td>1,082</td><td>p=0.90</td><td>±1.8 pt</td><td>~4 pt</td></tr>
+<tr><td>ChorusDuplex（CI 冒烟）</td><td>134</td><td>p=0.90</td><td>±5.1 pt</td><td>只能抓大退化</td></tr>
+<tr><td>自建集 v1.0 S1</td><td>≥600</td><td>p=0.90</td><td>±2.4 pt</td><td>~5 pt</td></tr>
+<tr><td>自建集 S0（FRR）</td><td>≥600</td><td>p=0.03</td><td>±1.4 pt</td><td>只能判&quot;≤3%&quot;</td></tr>
+</tbody></table>
+<p>&gt; 结论：<strong>HumDial 的 SDO 子集（200 条）不能用来选型</strong>——两个模型差 4 个点在统计上就是噪声。它只做对外坐标与回归；选型分辨器必须是 CoDeTT + 自建集。</p>
+<h3>2.3 一个必须先知道的事实：SDO 没有训练数据</h3>
+<p>HumDial-FDBench README 的分布表（Train / Dev / Test）：</p>
+<table><thead><tr><th>子类</th><th>Train</th><th>Dev</th><th>Test</th></tr></thead><tbody>
+<tr><td>URB（用户附和）</td><td>1,211</td><td>200</td><td>600</td></tr>
+<tr><td>PH（停顿处理）</td><td>1,211</td><td>200</td><td>600</td></tr>
+<tr><td>TPS（第三方说话）</td><td>120</td><td>200</td><td>600</td></tr>
+<tr><td><strong>SDO（对他人说，= S1）</strong></td><td><strong>0</strong></td><td>200</td><td>200</td></tr>
+</tbody></table>
+<p>影响三条：</p>
+<ol><li>想在 S1 上达标，<strong>不存在可从公开集直接取用的训练样本</strong>，只能靠自建集或跨集迁移</li><li>TPS 训练样本也只有 120 条，跨集迁移的价值有限</li><li>自建集不是&quot;补强项&quot;，而是 <strong>S1 的唯一训练来源</strong>——排期必须按训练+评测双用途规划</li></ol>
+<hr/>
+<h2>3. 尺子 1：公开集构建</h2>
+<h3>3.1 获取与解压</h3>
+<pre><code>
+# 1) HumDial-FDBench（test 包）
+huggingface-cli download ASLP-lab/HumDial-FDBench --repo-type dataset --local-dir data/humdial
+unzip data/humdial/Humdial-Track2-Test.zip -d data/humdial/test
+
+# 2) CoDeTT（单包 lz4）
+huggingface-cli download YingaoWang-casia/CoDeTT --repo-type dataset --local-dir data/codett
+lz4 -dc data/codett/CoDeTT.lz4 | tar -x -C data/codett/
+
+# 3) WearVox
+huggingface-cli download zlinao/WearVox --repo-type dataset --local-dir data/wearvox
+
+# 4) ChorusDuplex-SideTalk
+huggingface-cli download BiggestWave/ChorusDuplex-SideTalk --repo-type dataset --local-dir data/chorus
+</code></pre>
+<p>解压后第一件事是<strong>核对清单</strong>（写进 <code>data/MANIFEST.sha256</code>）：文件数、每条样本的音频可读性、标注字段齐备性。缺一条就停，不要带着半份数据开跑。</p>
+<h3>3.2 子集抽取与 S0–S4 映射</h3>
+<table><thead><tr><th>集</th><th>取哪些</th><th>字段/规则</th><th>映射</th><th>进指标</th></tr></thead><tbody>
+<tr><td>HumDial</td><td>test 的 Rejection 四子类</td><td>按标注 <code>rejection_type</code> 分桶</td><td>SDO→S1；TPS→S2/S3；URB/PH→仅回归</td><td>2,000（S1 200 / S2-S3 600）</td></tr>
+<tr><td>HumDial</td><td>test 的 Interruption 五子类</td><td>同上</td><td>不进 sideTalk 指标，仅回归</td><td>0（回归 3,000）</td></tr>
+<tr><td>HumDial</td><td>dev（800）</td><td>同上</td><td>调参专用，不报数</td><td>0</td></tr>
+<tr><td>CoDeTT</td><td><code>SystemIdle</code>→<code>Dismissal</code>→<code>SideTalk</code>、<code>SystemSpeaking</code>→<code>Maintain</code>→<code>SideTalk</code></td><td>目录路径即标签</td><td>→S1</td><td>~2,000（待核对）</td></tr>
+<tr><td>CoDeTT</td><td>其余 12 类意图</td><td>—</td><td>仅回归</td><td>0</td></tr>
+<tr><td>WearVox</td><td>Side-Talk Rejection 任务</td><td><code>audio_query</code>（单通道）/ <code>audio_query_mc</code>（多通道）</td><td>582 side-talk→S2/S3；500 valid query→S0</td><td>1,082</td></tr>
+<tr><td>ChorusDuplex</td><td>逐轮 <code>kind</code> / <code>speaker</code></td><td><code>annotations.jsonl</code></td><td><code>kind=side_talk</code>→S1；<code>speaker=third_party</code>→S2/S3；assistant 轮→S0；backchannel/interruption→仅回归</td><td>134 + 若干</td></tr>
+</tbody></table>
+<h3>3.3 五个已知的坑</h3>
+<table><thead><tr><th>#</th><th>坑</th><th>后果</th><th>处理</th></tr></thead><tbody>
+<tr><td>1</td><td>HumDial test 的 SDO 只有 200 条</td><td>无法区分 &lt;4pt 的模型差异</td><td>只做坐标；选型靠 CoDeTT + 自建</td></tr>
+<tr><td>2</td><td>SDO/TPS 训练样本为 0/120</td><td>不能拿公开集训练 S1 判别器</td><td>自建集承担训练；公开集只评测</td></tr>
+<tr><td>3</td><td>WearVox 的 1,082 里有 500 条是从 tool-calling 复制的正例</td><td>正负比例失真、同一音频多任务复用</td><td>报数时分开统计；不要把这 500 当独立正例做 FRR 主结论</td></tr>
+<tr><td>4</td><td>ChorusDuplex 是 TTS 合成、只有 134 条 side_talk</td><td>只能做链路冒烟，不能当验收</td><td>CI 必跑、不作为定选依据</td></tr>
+<tr><td>5</td><td>CoDeTT 子集条数未在 README 给出（仅给 18,000 总量 / 14 类）</td><td>±1.3pt 的精度声明可能不成立</td><td>解压后核对；若为 1,000 条则改为 ±1.8pt、&quot;可分辨 ~4pt&quot;</td></tr>
+</tbody></table>
+<h3>3.4 输入构造三要素（跨集统一，缺一条结论就不可比）</h3>
+<table><thead><tr><th>要素</th><th>规格</th><th>各集取值</th></tr></thead><tbody>
+<tr><td>音频</td><td>按各集原始声道布局，48kHz 或原采样率，不做重采样以外的处理</td><td>HumDial 双通道；Chorus 立体声 L=非助手/R=助手；WearVox 单通道版与 mc 版各跑一遍</td></tr>
+<tr><td>系统态</td><td><code>idle</code> / <code>speaking</code> 二值，显式给定</td><td>HumDial、CoDeTT 由标注给；Chorus 由 <code>trigger</code> 推</td></tr>
+<tr><td>多轮历史</td><td>最近 5 轮转写，纯文本</td><td>各集自带标注；不足补空；<strong>不得含 gold 的 addressee 标签</strong></td></tr>
+</tbody></table>
+<h3>3.5 判分规则</h3>
+<pre><code>
+输入：模型输出 JSON {&quot;action&quot;:..., &quot;confidence&quot;:..., &quot;reason&quot;:...}
+规则优先级：
+1. 解析失败 / 动作不在允许集合 → 记 invalid，单独计数（&gt;1% 视为该模型不可用于产品）
+2. action = silent | silent_record → 判&quot;静默&quot;
+3. action = clarify → 记&quot;非静默&quot;，单列，不计入拒识率分子、不计入 FAR
+4. action = respond | ack | wait → 判&quot;响应&quot;（应静默样本即算误响应；S0 样本算正确）
+5. 应静默样本上 action 触发工具调用 → 记&quot;误执行&quot;（一票否决）
+</code></pre>
+<p>公开集的 gold 只有&quot;该静默 / 该响应 + 理由类别&quot;，因此：</p>
+<ul><li>CoDeTT 四动作映射：<code>Dismiss</code>→silent、<code>Takeover</code>→respond、<code>Stop&amp;Listen</code>/<code>Maintain</code>→仅回归（语义 VAD 域）</li><li>clarify 在 CoDeTT 上<strong>不计入 4 动作 ACC</strong>，单列 clarify 率</li></ul>
+<h3>3.6 各集门槛与 sanity check</h3>
+<table><thead><tr><th>集</th><th>必须先复现的基线</th><th>允许偏差</th><th>复现失败怎么办</th></tr></thead><tbody>
+<tr><td>HumDial</td><td>官方 Baseline 拒识 35.2、冠军 72.2</td><td>±3 pt</td><td>判 harness bug（时序对齐/RS 计算），修完再跑</td></tr>
+<tr><td>WearVox</td><td>两段式基线 85.6%（单通道）</td><td>±3 pt</td><td>检查声道选择与重采样</td></tr>
+<tr><td>CoDeTT</td><td>仓库给出/可复现的四动作 baseline</td><td>±3 pt</td><td>检查系统态与 5 轮历史拼装</td></tr>
+<tr><td>ChorusDuplex</td><td>无官方基线</td><td>—</td><td>用规则基线（全 respond）与全 silent 定位下限/上限</td></tr>
+</tbody></table>
+<hr/>
+<h2>4. 尺子 2：自建集构建</h2>
+<h3>4.1 场景矩阵</h3>
+<table><thead><tr><th>维度</th><th>音箱（远场）</th><th>手机（近场）</th></tr></thead><tbody>
+<tr><td>距离</td><td>1 / 2 / 4 m</td><td>手持 0.2 m / 桌放 0.5 m / 车载 0.6 m</td></tr>
+<tr><td>说话人</td><td>1–4 人（家庭多成员）</td><td>主用户 1 人 + 0–2 旁人</td></tr>
+<tr><td>朝向</td><td>对设备 / 对家人 / 背对</td><td>对屏幕 / 对旁人 / 侧头</td></tr>
+<tr><td>噪声</td><td>电视开 / 音乐外放 / 厨房 / 安静</td><td>街道 / 车内 / 办公室 / 外放短视频</td></tr>
+<tr><td>语言</td><td>普通话 + 15% 中英混说</td><td>同左</td></tr>
+</tbody></table>
+<h3>4.2 规模与每格配额（v1.0，3,000 段）</h3>
+<table><thead><tr><th>场景</th><th>音箱</th><th>手机</th><th>合计</th><th>统计理由</th></tr></thead><tbody>
+<tr><td>S0 真指令/答句</td><td>400</td><td>300</td><td><strong>700</strong></td><td>FRR 需 ≥600 才能给 ±1.4pt（p=3%）</td></tr>
+<tr><td>S1 主用户→旁人</td><td>400</td><td>300</td><td><strong>700</strong></td><td>核心场景，且是 S1 唯一训练来源，需 ≥600</td></tr>
+<tr><td>S2 旁人→主用户</td><td>250</td><td>150</td><td>400</td><td>p=0.95 → ±1.7pt</td></tr>
+<tr><td>S3 旁人→旁人</td><td>250</td><td>150</td><td>400</td><td>同上</td></tr>
+<tr><td>S4 媒体/电子人声</td><td>250</td><td>150</td><td>400</td><td>同上</td></tr>
+<tr><td>self-talk（单列）</td><td>100</td><td>100</td><td>200</td><td>只观测基线，不设门槛</td></tr>
+<tr><td>speaker-switch 对抗</td><td>100</td><td>100</td><td>200</td><td>同上</td></tr>
+<tr><td><strong>合计</strong></td><td><strong>1,750</strong></td><td><strong>1,250</strong></td><td><strong>3,000</strong></td><td>—</td></tr>
+</tbody></table>
+<p>两种设备<strong>分开出指标</strong>，不混池；S1 的 700 段里，至少 200 段含&quot;帮我/给我&quot;等请求句式（对抗子集）。</p>
+<h3>4.3 采集 SOP</h3>
+<ol><li>演员照脚本演（对齐 HumDial 的&quot;LLM 脚本 + 演员表演&quot;），打断/重叠发生在语义接缝（迟疑、换气）而非随机时间戳</li><li>side-talk 脚本<strong>不得</strong>含唤醒词；对抗子集单独成轨，故意含&quot;帮我/小X&quot;但交流对象明确是旁人</li><li>每段 10–30 s，同步记录：SNR、混响估计（RT60）、DoA 真值、距离真值、设备型号与摆位</li><li>同一场景至少 3 个 take，事后按自然度挑选，未选中 take 保留为&quot;边缘样本&quot;备查</li><li>现场即校验：波形不削波、双通道无串音、标注文件与音频文件名一一对应</li></ol>
+<h3>4.4 标注 schema 与一致性</h3>
+<table><thead><tr><th>层级</th><th>字段</th></tr></thead><tbody>
+<tr><td>段级</td><td><code>speaker_role</code>（primary/other/media）、<code>directed_to</code>（assistant/companion/none）、<code>gold_action</code>（respond/ack/wait/clarify/silent/silent_record）、<code>scene_tags[]</code>、<code>is_adversarial</code></td></tr>
+<tr><td>轮级</td><td>词级时间戳、转写、意图标签、与上一系统轮的衔接类型（答句/打断/无关/附和）</td></tr>
+</tbody></table>
+<ul><li>双人独立标注 + 第三人仲裁；<strong>Cohen&#x27;s κ ≥ 0.8 才入库</strong></li><li>每版本抽 10% 复标，κ 掉到 0.7 以下整批返工</li><li>标注指引单独成文（含 20 条边界样例），随版本号管理</li></ul>
+<h3>4.5 切分与防泄漏</h3>
+<table><thead><tr><th>措施</th><th>做法</th></tr></thead><tbody>
+<tr><td>说话人隔离</td><td>train/dev/test 三集说话人不重叠（按人切，不按段切）</td></tr>
+<tr><td>场景隔离</td><td>同一房间/同一噪声组合不出现在两个 split 的同一场景里</td></tr>
+<tr><td>去重</td><td>音频指纹（chromaprint）查重，同源脚本的不同 take 不跨 split</td></tr>
+<tr><td>防泄漏</td><td>脚本文本、录音日期、噪声源名不出现在 prompt 中；评估时不向模型透露&quot;这是测试&quot;</td></tr>
+<tr><td>训练用途</td><td>只有 train 可用于训练 L2 判别器；test 只评不训</td></tr>
+</tbody></table>
+<h3>4.6 成本与排期【估算】</h3>
+<table><thead><tr><th>项</th><th>数量</th><th>说明</th></tr></thead><tbody>
+<tr><td>有效音频</td><td>3,000 × 20 s ≈ 16.7 h</td><td>拍摄比按 1:3，现场约 50 h</td></tr>
+<tr><td>录音</td><td>6 个工作日</td><td>2 演员 + 1 录音师 + 2 种设备</td></tr>
+<tr><td>标注</td><td>约 750 人时（≈94 人日）</td><td>3,000 段 × 双标 + 仲裁</td></tr>
+<tr><td>合计</td><td>6–8 周</td><td>与公开集评测并行，不串行</td></tr>
+</tbody></table>
+<hr/>
+<h2>5. 统一评测协议（harness）</h2>
+<h3>5.1 目录结构</h3>
+<pre><code>
+ruler1/
+├── data/                    # 各集原始数据（不入 git）
+├── manifests/
+│   ├── humdial_test.jsonl
+│   ├── codett_sidetalk.jsonl
+│   ├── wearvox_str.jsonl
+│   └── chorus.jsonl
+├── prompts/                 # 冻结的提示词，含版本号
+├── runners/                 # 各模型适配器（jev / hf / api / e2e）
+├── predictions/             # &lt;model&gt;__&lt;manifest&gt;__&lt;runhash&gt;.jsonl
+├── score.py
+└── reports/                 # 生成的表与图
+</code></pre>
+<h3>5.2 manifest 字段</h3>
+<pre><code>
+{&quot;id&quot;:&quot;humdial-test-SDO-000123&quot;,&quot;dataset&quot;:&quot;humdial&quot;,&quot;split&quot;:&quot;test&quot;,
+ &quot;audio&quot;:&quot;data/humdial/test/xxx.wav&quot;,&quot;channels&quot;:2,
+ &quot;system_state&quot;:&quot;speaking&quot;,&quot;history&quot;:[{&quot;role&quot;:&quot;user&quot;,&quot;text&quot;:&quot;...&quot;}],
+ &quot;gold_action&quot;:&quot;silent&quot;,&quot;gold_scene&quot;:&quot;S1&quot;,&quot;gold_lang&quot;:&quot;zh&quot;,
+ &quot;meta&quot;:{&quot;rejection_type&quot;:&quot;SDO&quot;,&quot;snr_db&quot;:12.5,&quot;source&quot;:&quot;real&quot;}}
+</code></pre>
+<h3>5.3 predictions 字段</h3>
+<pre><code>
+{&quot;id&quot;:&quot;humdial-test-SDO-000123&quot;,&quot;model&quot;:&quot;qwen3-0.6b-npu&quot;,&quot;run&quot;:&quot;2026-11-03T10:00Z&quot;,
+ &quot;action&quot;:&quot;silent&quot;,&quot;confidence&quot;:0.87,&quot;reason&quot;:&quot;...&quot;,&quot;latency_ms&quot;:42,
+ &quot;raw&quot;:&quot;&lt;原始输出，便于回溯&gt;&quot;}
+</code></pre>
+<h3>5.4 解析与容错</h3>
+<ul><li>动作不在白名单 → <code>invalid</code>（单独计数，&gt;1% 该模型直接出局）</li><li>缺 <code>confidence</code> → 按 1.0 计，但记 <code>warn_missing_conf</code></li><li>分类模型（非生成式）输出概率向量 → 取 argmax，<code>confidence</code> 取该概率</li></ul>
+<h3>5.5 score.py 输出</h3>
+<pre><code>
+reports/&lt;model&gt;__&lt;manifest&gt;.md
+  ├─ 分场景表：S1/S2/S3/S4 拒识率（点值 + 95%CI）
+  ├─ 汇总：FAR_w、FRR、误执行、clarify 率、invalid 率
+  ├─ 延迟：P50/P90（决策延迟、响应首延迟）
+  └─ 错误归因：ACC 错 / 应静默却 respond / 蒙对但 SMR 命中
+</code></pre>
+<hr/>
+<h2>6. 指标与统计</h2>
+<h3>6.1 指标定义</h3>
+<table><thead><tr><th>指标</th><th>公式</th><th>备注</th></tr></thead><tbody>
+<tr><td>分场景拒识率</td><td><code>Rej_s = 正确静默数_s / 应静默数_s</code></td><td>按 S1–S4 分别出</td></tr>
+<tr><td>加权误响应率</td><td><code>FAR_w = Σ w_s × (1 − Rej_s)</code></td><td>w 按产品流量占比（起始建议 S1 0.40 / S2 0.15 / S3 0.25 / S4 0.20）；<strong>不设独立常数门槛</strong></td></tr>
+<tr><td>漏响应率</td><td><code>FRR = S0 被误吞数 / S0 总数</code></td><td>承诺 ≤3%，内部目标 2% 待 S0≥3,000</td></tr>
+<tr><td>误执行</td><td>计数</td><td>一票否决，报 <code>0/N</code> 与 95% 上界 <code>≤3/N</code></td></tr>
+<tr><td>clarify 率</td><td><code>clarify 次数 / 总样本</code></td><td>监控 ≤2%，不计入 FAR</td></tr>
+<tr><td>决策延迟</td><td>语音结束 → silent 落定</td><td>P50/P90，窗 ≤500 ms</td></tr>
+<tr><td>响应首延迟增量</td><td>含裁判 vs 不含裁判</td><td>P90 增量 ≤100 ms</td></tr>
+</tbody></table>
+<h3>6.2 工作点而不是单点</h3>
+<p>对每个模型扫 <code>confidence</code> 阈值 0.05–0.95（步长 0.05），报三条：</p>
+<ol><li>固定 <code>FAR_w = 5%</code> 处的 FRR</li><li>固定 <code>FRR = 3%</code> 处的 FAR_w</li><li>FAR–FRR 曲线的 AUC（AUC 越大越好，可用梯形法）</li></ol>
+<p>只报&quot;拒识率 92%&quot;是无意义的——不同阈值下可以差 15 个点。</p>
+<h3>6.3 置信区间与显著性</h3>
+<table><thead><tr><th>场景</th><th>方法</th></tr></thead><tbody>
+<tr><td>单模型单指标</td><td>Wilson 区间（不用正态近似，p 接近 0/1 时更稳）</td></tr>
+<tr><td>两模型同批样本</td><td>McNemar 检验（配对，只看不一致样本）</td></tr>
+<tr><td>AUC/曲线差异</td><td>Bootstrap 1,000 次，报差值的 95%CI</td></tr>
+<tr><td>多模型比较</td><td>Holm 校正，避免多重比较假阳性</td></tr>
+</tbody></table>
+<h3>6.4 报数纪律</h3>
+<ul><li>差异 &lt; CI 宽度 → 写&quot;不可区分&quot;，不写&quot;略优&quot;</li><li>每次结果必须带：模型版本、prompt 版本、manifest hash、运行时间</li><li>同一张表里不允许混用不同 split 的数据</li></ul>
+<hr/>
+<h2>7. 模型选型打分卡</h2>
+<h3>7.1 硬淘汰线（任一触发即出局）</h3>
+<table><thead><tr><th>条件</th><th>阈值</th></tr></thead><tbody>
+<tr><td>误执行</td><td>&gt; 0</td></tr>
+<tr><td>invalid 输出率</td><td>&gt; 1%</td></tr>
+<tr><td>S1 拒识率</td><td>&lt; 80%</td></tr>
+<tr><td>决策延迟 P90</td><td>&gt; 800 ms</td></tr>
+<tr><td>部署约束</td><td>需出境且无替代方案</td></tr>
+</tbody></table>
+<h3>7.2 加权打分（通过硬淘汰后）</h3>
+<table><thead><tr><th>维度</th><th>权重</th><th>计分方式</th></tr></thead><tbody>
+<tr><td>S1 拒识率（CoDeTT + 自建 dev）</td><td>30</td><td>线性映射，80%→0 分，95%→满分</td></tr>
+<tr><td>FAR_w @ FRR≤3%</td><td>25</td><td>越低越好，5%→满分，15%→0 分</td></tr>
+<tr><td>误执行余量</td><td>15</td><td>0 次满分，出现即淘汰（本项用于排名区分）</td></tr>
+<tr><td>决策延迟 P90</td><td>10</td><td>≤300ms 满分，800ms→0 分</td></tr>
+<tr><td>可部署性（端侧/私有化）</td><td>10</td><td>端侧满分，私有化 7，仅 API 3</td></tr>
+<tr><td>成本（每千次决策）</td><td>10</td><td>≤¥1 满分，¥10→0 分</td></tr>
+</tbody></table>
+<h3>7.3 两条跑道与对照</h3>
+<table><thead><tr><th>跑道</th><th>输入</th><th>候选</th><th>作用</th></tr></thead><tbody>
+<tr><td>A 文本裁判</td><td>转写 + 系统态 + 5 轮历史</td><td>Qwen3-0.6B/1.7B/4B、Qwen3.5-4B/9B、DeepSeek-V4-Flash、Jev（L3 快分支）、<strong>规则+BERT 分类器（必跑基线）</strong></td><td>主选型跑道</td></tr>
+<tr><td>B 端到端</td><td>原始音频</td><td>Qwen-Audio-3.1-Realtime、Gander、Moshi</td><td>给出&quot;模型自带拒识&quot;上界</td></tr>
+</tbody></table>
+<p>A 跑道必须跑两版：<strong>gold 转写</strong> 与 <strong>真实 ASR 转写</strong>。两版差值 = ASR 误差传导，这是选型结论里最有价值的一列（决定&quot;值不值得为 ASR 升级付费&quot;）。</p>
+<hr/>
+<h2>8. 排期与交付物</h2>
+<h3>8.1 十二天计划</h3>
+<table><thead><tr><th>天</th><th>任务</th><th>产出</th><th>Go/No-Go</th></tr></thead><tbody>
+<tr><td>D1</td><td>harness 骨架 + 4 个 manifest 生成器</td><td>能跑通一条假样本</td><td>解析链路无报错</td></tr>
+<tr><td>D2</td><td>Chorus + WearVox 跑通</td><td>首张表 + sanity check</td><td>基线复现偏差 ≤3pt</td></tr>
+<tr><td>D3</td><td>CoDeTT 解压、子集抽取</td><td>SideTalk 子集条数确认</td><td>条数 ≥1,500，否则降级为诊断集</td></tr>
+<tr><td>D4</td><td>CoDeTT 全量跑（2,000）</td><td>主分辨表初版</td><td>—</td></tr>
+<tr><td>D5</td><td>HumDial test 解压 + 四子类映射</td><td>对外坐标表</td><td>SDO=200 / TPS=600 核对一致</td></tr>
+<tr><td>D6</td><td>HumDial dev（800）调参</td><td>prompt/阈值冻结版 v1</td><td>dev 上 S1 ≥85%</td></tr>
+<tr><td>D7</td><td>test 一次性评估</td><td>定稿表（test 只此一次）</td><td>与 dev 差距 ≤5pt</td></tr>
+<tr><td>D8</td><td>跑道 B（端到端 3 个）</td><td>上界对照</td><td>—</td></tr>
+<tr><td>D9</td><td>统计（CI / McNemar / 工作点）</td><td>曲线图 + 显著性表</td><td>—</td></tr>
+<tr><td>D10</td><td>打分卡 + 提名</td><td>2 个模型进尺子 2</td><td>—</td></tr>
+<tr><td>D11–D12</td><td>尺子 2 先导批（每类 50 条）</td><td>穿刺报告</td><td>S1 ≥85% 且误执行 0</td></tr>
+</tbody></table>
+<h3>8.2 交付物</h3>
+<ol><li><code>reports/选型总表.md</code>：8–10 个模型 × 6 个指标 + CI + 排名</li><li><code>reports/工作点曲线.png</code>：FAR–FRR 曲线（每模型一条）</li><li><code>reports/错误归因.md</code>：三桶错误（没识别 / 不肯闭嘴 / 蒙对理由错）分布</li><li><code>manifests/</code>：可复现的样本清单（含 hash）</li><li><code>predictions/</code>：全部原始输出（含 latency）</li><li>一页结论：两个提名模型 + 淘汰原因 + 下一步</li></ol>
+<h3>8.3 成本</h3>
+<table><thead><tr><th>项</th><th>估算</th></tr></thead><tbody>
+<tr><td>API 调用（Jev + LLM，约 5,500 样本 × 3 遍）</td><td>&lt; ¥50</td></tr>
+<tr><td>本地推理（Qwen3 系列，单卡）</td><td>约 20 机时</td></tr>
+<tr><td>人力</td><td>1 人 × 12 天</td></tr>
+</tbody></table>
+<hr/>
+<h2>9. 风险与回退</h2>
+<h3>9.1 数据侧风险</h3>
+<table><thead><tr><th>风险</th><th>影响</th><th>回退</th></tr></thead><tbody>
+<tr><td>CoDeTT SideTalk 实际条数远少于 2,000</td><td>选型分辨力下降</td><td>用&quot;CoDeTT + Chorus + 自建先导批&quot;合并判定；把差异门槛放宽到 5pt</td></tr>
+<tr><td>HumDial test 包标签缺失/语言分桶不可用</td><td>拿不到对外坐标</td><td>邮件申请（wangshuiyuan@mail.nwpu.edu.cn）；期间只报内部指标，不宣称对标</td></tr>
+<tr><td>SDO 无训练数据导致 S1 上不去</td><td>选型结论失真</td><td>L2 判别器只用规则+声纹先跑；S1 的提升全部押在自建 train 上</td></tr>
+<tr><td>自建集采集延期</td><td>验收无数据</td><td>先用公开集 + 线上 badcase 回流做灰度，不承诺验收</td></tr>
+</tbody></table>
+<h3>9.2 方法侧风险</h3>
+<table><thead><tr><th>风险</th><th>影响</th><th>回退</th></tr></thead><tbody>
+<tr><td>判分器版本漂移</td><td>跨版本不可比</td><td>判分 prompt + 模型 id 入仓，写进报告头</td></tr>
+<tr><td>过拟合公开集</td><td>test 数字虚高</td><td>dev/test 隔离 + 每季度换一批自建 test</td></tr>
+<tr><td>阈值调优引入乐观偏差</td><td>工作点曲线虚高</td><td>阈值只在 dev 上选，test 只验证</td></tr>
+</tbody></table>
+<hr/>
+<h2>10. 附录</h2>
+<h3>10.1 各集字段速查</h3>
+<table><thead><tr><th>集</th><th>关键字段</th><th>备注</th></tr></thead><tbody>
+<tr><td>HumDial</td><td><code>rejection_type</code>（URB/PH/TPS/SDO）、<code>lang</code>、双通道音频</td><td>dev/test 分目录</td></tr>
+<tr><td>CoDeTT</td><td>目录路径即动作与意图；jsonl 含系统态与 5 轮历史</td><td>单包解压</td></tr>
+<tr><td>WearVox</td><td><code>audio_query</code>、<code>audio_query_mc</code>、<code>task</code></td><td>S-T Rejection 取 1,082</td></tr>
+<tr><td>ChorusDuplex</td><td><code>annotations.jsonl</code>（<code>kind</code>/<code>speaker</code>/<code>trigger</code>）、<code>*.timeline.json</code></td><td>clean 与 <code>_babble</code> 各 100</td></tr>
+</tbody></table>
+<h3>10.2 常用命令</h3>
+<pre><code>
+# 看 manifest 条数与场景分布
+python3 -c &quot;import json,collections;rows=[json.loads(l) for l in open(&#x27;manifests/humdial_test.jsonl&#x27;)];\
+print(len(rows));print(collections.Counter(r[&#x27;gold_scene&#x27;] for r in rows))&quot;
+
+# 跑一个模型（示例：本地 vLLM）
+python3 runners/hf_runner.py --manifest manifests/codett_sidetalk.jsonl \
+  --model Qwen/Qwen3-1.7B --out predictions/qwen3-1.7b__codett__$(date +%s).jsonl
+
+# 打分
+python3 score.py --pred predictions/qwen3-1.7b__codett__*.jsonl \
+  --manifest manifests/codett_sidetalk.jsonl --report reports/qwen3-1.7b__codett.md
+</code></pre>
+<h3>10.3 指标公式汇总</h3>
+<pre><code>
+Rej_s      = 正确静默_s / 应静默_s
+FAR_w      = Σ_s w_s (1 − Rej_s)
+FRR        = 误吞数_S0 / 总数_S0
+clarify率  = clarify数 / 总样本
+决策延迟    = t(decision) − t(speech_end)          # P50/P90
+CI 半宽     = z·√(p(1−p)/n),  z=1.96
+最小可分辨差 ≈ 2 × CI 半宽
+</code></pre>
+<h3>10.4 数据合规</h3>
+<table><thead><tr><th>集</th><th>许可</th><th>义务</th></tr></thead><tbody>
+<tr><td>HumDial-FDBench</td><td>Apache-2.0</td><td>保留声明</td></tr>
+<tr><td>ChorusDuplex-SideTalk</td><td>CC BY 4.0</td><td>babble 变体再分发须保留 VOiCES 出处</td></tr>
+<tr><td>WearVox</td><td>见仓库</td><td>眼镜第一视角，勿用于人脸/身份推断</td></tr>
+<tr><td>自建集</td><td>内部</td><td>声纹与旁听缓存按隐私策略留存，标注含个人信息需脱敏</td></tr>
+</tbody></table>
+<hr/>
+<p><em>本文与《拒识sideTalk设计文档》同源；指标口径冲突时以设计文档 §1.3 为准，选型流程以本文为准。</em></p></body></html>
