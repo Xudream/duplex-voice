@@ -13,51 +13,49 @@ pre code{background:none;color:inherit;padding:0}
 blockquote{border-left:4px solid #cbd5e1;margin:10px 0;padding:2px 14px;color:#4b5563}
 hr{border:none;border-top:1px solid #e5e7eb;margin:26px 0}
 </style></head><body><h1>尺子1 构建报告（公开集）</h1>
-<p>&gt; 版本：v1.1　｜　更新：2026-11-01（修掉重复计数、访客指令单列、路径统一、音频就位标记）</p>
+<p>&gt; 版本：v1.2　｜　更新：2026-11-02（WearVox 补齐，全部音频就位）</p>
 <p>&gt; 数据位置：<code>~/.hermes/workspace/ruler1/data/</code>（本地，不入库）</p>
-<p>&gt; 工装：<code>tools/ruler1/</code>（fetch / build_manifests / llm_judge / score / stats / baselines）</p>
+<p>&gt; 工装：<code>tools/ruler1/</code>（fetch / build_manifests / llm_judge / rule_baseline / score / stats / baselines / make_mini）</p>
 <p>&gt; 口径：见《sidetalk评测集构建方案.md》§6 与《拒识sideTalk设计文档.md》§1.3</p>
 <hr/>
 <h2>1. 结论</h2>
-<p>尺子1 可用：三套公开集完成下载、去重、S0–S4 映射，<strong>清单 3,309 条，其中音频已就位 2,595 条</strong>；判分链路用基线做了正反验证。</p>
+<p>尺子1 <strong>已完整可用</strong>：三套公开集 3,309 条清单，<strong>音频 3,309/3,309 全部就位</strong>；判分链路用基线做了正反验证，并已用最小集跑完首轮模型评测。</p>
 <table><thead><tr><th>指标</th><th>数值</th><th>备注</th></tr></thead><tbody>
 <tr><td>清单总数</td><td>3,309</td><td>含回归 576、访客单列 51</td></tr>
-<tr><td>音频就位</td><td>2,595</td><td>WearVox 缺 714 条音频（仓库 59.45GB，仅下了前 1,000 文件）</td></tr>
-<tr><td>负例（S1–S3）</td><td>1,668（就位）</td><td>无 S4 样本</td></tr>
-<tr><td>正例（S0）</td><td>300（就位）</td><td>另 S0_guest 51 单列，不计入 FRR</td></tr>
-<tr><td>回归（REG）</td><td>576（就位）</td><td>URB/PH 等，只验不退化</td></tr>
-<tr><td>可分辨最小差异</td><td>S1 ±2.3pt / S2 ±2.1pt / S3 ±3.6pt / S0 ±1.9pt</td><td>Wilson 95%</td></tr>
+<tr><td>音频就位</td><td><strong>3,309（100%）</strong></td><td>WearVox 714 条已于 2026-11-02 补齐</td></tr>
+<tr><td>负例（S1–S3）</td><td>2,053</td><td>无 S4 样本</td></tr>
+<tr><td>正例（S0）</td><td>629</td><td>另 S0_guest 51 单列，不计入 FRR</td></tr>
+<tr><td>回归（REG）</td><td>576</td><td>URB/PH 等，只验不退化</td></tr>
+<tr><td>可分辨最小差异</td><td>S1 ±1.9pt / S2 ±2.1pt / S3 ±3.3pt / S0 ±1.3pt</td><td>Wilson 95%</td></tr>
 </tbody></table>
 <hr/>
-<h2>2. 数据集与映射结果（v1.1 修订后）</h2>
+<h2>2. 数据集与映射结果</h2>
 <table><thead><tr><th>集</th><th>语言</th><th>原始形态</th><th>清单条数</th><th>音频就位</th><th>S0</th><th>S0_guest</th><th>S1</th><th>S2</th><th>S3</th><th>REG</th></tr></thead><tbody>
 <tr><td>ChorusDuplex-SideTalk</td><td>中文</td><td>TTS 双声道逐轮</td><td>1,338</td><td>1,338</td><td>129</td><td>51</td><td>386</td><td>452</td><td>234</td><td>86</td></tr>
-<tr><td>WearVox（non-assistant-directed）</td><td>英文</td><td>眼镜单/多通道</td><td>1,082</td><td>368</td><td>171</td><td>—</td><td>162</td><td>—</td><td>35</td><td>—</td></tr>
+<tr><td>WearVox（non-assistant-directed）</td><td>英文</td><td>眼镜单通道</td><td>1,082</td><td>1,082</td><td>500</td><td>—</td><td>501</td><td>—</td><td>81</td><td>—</td></tr>
 <tr><td>HumDial-FDBench（test，中文）</td><td>中文</td><td>真实双通道</td><td>889</td><td>889</td><td>—</td><td>—</td><td>99</td><td>300</td><td>—</td><td>490</td></tr>
-<tr><td><strong>合计</strong></td><td>—</td><td>—</td><td><strong>3,309</strong></td><td><strong>2,595</strong></td><td><strong>300</strong></td><td><strong>51</strong></td><td><strong>647</strong></td><td><strong>752</strong></td><td><strong>269</strong></td><td><strong>576</strong></td></tr>
+<tr><td><strong>合计</strong></td><td>—</td><td>—</td><td><strong>3,309</strong></td><td><strong>3,309</strong></td><td><strong>629</strong></td><td><strong>51</strong></td><td><strong>986</strong></td><td><strong>752</strong></td><td><strong>315</strong></td><td><strong>576</strong></td></tr>
 </tbody></table>
-<p>&gt; 表内 S0/S1/S2/S3 列统计的是<strong>音频就位</strong>部分；清单全量的分布见 §2.3。</p>
-<h3>2.1 v1.1 修掉的三个问题</h3>
+<h3>2.1 已修掉的问题</h3>
 <table><thead><tr><th>#</th><th>问题</th><th>影响</th><th>修法</th></tr></thead><tbody>
-<tr><td>1</td><td><strong>HumDial 重复计数</strong>：每个样本有 <code>X.wav</code> 与 <code>clean_X.wav</code> 两版，被当成两条</td><td>清单虚高 1,441 → 实际 889（虚高 62%）</td><td>只收 raw，clean 挂 <code>audio_clean</code> 字段</td></tr>
-<tr><td>2</td><td><strong>访客指令混进 S0</strong>：非主用户直接对助手说话（51 条），按设计文档属&quot;范围外&quot;</td><td>FRR 分母被污染</td><td>单列 <code>S0_guest</code>，不计入 FRR</td></tr>
-<tr><td>3</td><td><strong>路径混用</strong>：Chorus/WearVox 相对路径、HumDial 绝对路径</td><td>runner 直接跑会找不到文件</td><td>统一为 <code>audio_root + audio</code>，并加 <code>audio_ok</code> 就位标记</td></tr>
+<tr><td>1</td><td><strong>HumDial 重复计数</strong>：每样本有 <code>X.wav</code> 与 <code>clean_X.wav</code> 两版，被当成两条</td><td>清单虚高 62%（1,441 → 889）</td><td>只收 raw，clean 挂 <code>audio_clean</code> 字段</td></tr>
+<tr><td>2</td><td><strong>访客指令混进 S0</strong>：非主用户对助手说话 51 条，属设计文档&quot;范围外&quot;</td><td>污染 FRR 分母</td><td>单列 <code>S0_guest</code>，不计入 FRR</td></tr>
+<tr><td>3</td><td><strong>路径混用</strong>：相对/绝对混用</td><td>runner 找不到文件</td><td>统一 <code>audio_root + audio</code>，加 <code>audio_ok</code> 标记</td></tr>
+<tr><td>4</td><td><strong>WearVox 下载截断</strong>：tree API 每页 1,000 条，只请求一次</td><td>714/1,082 音频从未下载（清单 S1 只覆盖 162 条）</td><td>fetch.py 跟 <code>Link: rel=&quot;next&quot;</code> 翻页（实测 7,688 文件 / 8 页），按清单补下 128 MB</td></tr>
+<tr><td>5</td><td><strong>HumDial 文本口径</strong>：整段转写含多说话人</td><td>模型看到开头提问就判响应，S1 假性 0%</td><td>清单加 <code>segments</code>/<code>target_text</code>，runner 默认只判当前 VAD 段</td></tr>
+<tr><td>6</td><td>Chorus 7 段对话缺 timeline</td><td>静默丢 103 轮</td><td>显式告警，不再黑盒</td></tr>
 </tbody></table>
 <h3>2.2 各集映射规则</h3>
 <table><thead><tr><th>集</th><th>规则</th></tr></thead><tbody>
 <tr><td>ChorusDuplex</td><td>主用户 = 该对话中对助手说话最多者（数据驱动）；对助手说→S0；非主用户对助手说→S0_guest；主用户对旁人→S1；旁人对主用户→S2；旁人之间→S3；<code>backchannel/interruption</code>→REG</td></tr>
 <tr><td>WearVox</td><td><code>[Active]</code>→S0；<code>[Mute]</code>+<code>unrelated_talk</code>→S1；<code>[Mute]</code>+<code>bystander_only</code>→S3</td></tr>
-<tr><td>HumDial</td><td><code>talk_to_others</code>→S1；<code>others_talk_to_user_before/after</code>→S2；<code>backchannel</code>/<code>pause</code>→REG</td></tr>
+<tr><td>HumDial</td><td><code>talk_to_others</code>→S1；<code>others_talk_to_user_before/after</code>→S2；<code>backchannel</code>/<code>pause</code>→REG；只判最后一段（产品 VAD 口径）</td></tr>
 </tbody></table>
-<h3>2.3 清单全量分布（含未就位音频）</h3>
-<table><thead><tr><th>场景</th><th>条数</th></tr></thead><tbody>
-<tr><td>S0</td><td>629</td></tr>
-<tr><td>S0_guest</td><td>51</td></tr>
-<tr><td>S1</td><td>986</td></tr>
-<tr><td>S2</td><td>752</td></tr>
-<tr><td>S3</td><td>315</td></tr>
-<tr><td>REG</td><td>576</td></tr>
-<tr><td>合计</td><td>3,309</td></tr>
+<h3>2.3 数据规模与来源</h3>
+<table><thead><tr><th>集</th><th>仓库实际规模</th><th>本机下载</th><th>许可</th></tr></thead><tbody>
+<tr><td>ChorusDuplex-SideTalk</td><td>100 对话 / 1,667 轮 / 3.4 h</td><td>1.0 GB（<code>releases/</code> 已删）</td><td>CC-BY-4.0</td></tr>
+<tr><td>WearVox</td><td><strong>7,688 文件 / 59.45 GB</strong>（3,842 <code>wav</code> + 3,842 <code>wav_mc</code>）</td><td>1,723 个 wav（本清单只需 1,082 个，约 310 MB）</td><td>见仓库</td></tr>
+<tr><td>HumDial-FDBench test</td><td>zip 1.82 GB → 完整解压 6.9 GB</td><td>只解中文拒识四类 956 MB</td><td>见仓库</td></tr>
 </tbody></table>
 <hr/>
 <h2>3. 判分链路校验</h2>
@@ -67,15 +65,14 @@ hr{border:none;border-top:1px solid #e5e7eb;margin:26px 0}
 <tr><td>dryrun（oracle，120 条冒烟）</td><td>0.00%</td><td>0.00%</td><td>✅ 链路通</td></tr>
 </tbody></table>
 <p>&gt; 已修 bug：S0 是&quot;应响应&quot;样本，FRR 应等于其静默率，原实现写成 <code>1 − 静默率</code>，方向反了。</p>
+<p>&gt; 已修 bug：工作点扫描原先只允许 respond/clarify 回退，漏了 ack/wait，阈值扫不动。</p>
 <hr/>
 <h2>4. 已知缺口</h2>
 <table><thead><tr><th>缺口</th><th>影响</th><th>处理</th></tr></thead><tbody>
-<tr><td><strong>WearVox 714 条音频缺</strong></td><td>英文眼镜样本只剩 368 条</td><td>仓库实为 7,688 文件 / 59.45GB（我之前拿到的是被截断的 1,000 条）；补齐需 ~8GB</td></tr>
-<tr><td>HumDial 英文未解压</td><td>英文真实样本缺</td><td>解压需 6.9GB 空间</td></tr>
-<tr><td><strong>S4 = 0</strong></td><td>电视/外放场景无法评测</td><td>只能用自建集补</td></tr>
-<tr><td>S3 仅 269 条就位</td><td>±3.6pt，弱</td><td>后续补</td></tr>
-<tr><td>模型 API 429</td><td>真实跑分未做</td><td>待额度</td></tr>
-<tr><td>无空间信号真值</td><td>尺子1 只能选&quot;裁判&quot;</td><td>前端留到尺子2</td></tr>
+<tr><td>HumDial 英文未解压</td><td>英文真实样本缺（现有英文全来自 WearVox）</td><td>解压需 6.9 GB 空间</td></tr>
+<tr><td><strong>S4 = 0</strong></td><td>电视/外放场景无法评测</td><td>见《S4媒体人声冒烟方案.md》（200 条 / 3 天）</td></tr>
+<tr><td>无空间信号真值</td><td>尺子1 只能选&quot;裁判&quot;，评不了 DoA/双麦</td><td>留给尺子2 与真机</td></tr>
+<tr><td>只有 test 无 train</td><td>S1 无公开训练集（FDBench SDO 训练集 0 条）</td><td>S1 训练数据只能自建</td></tr>
 </tbody></table>
 <hr/>
 <h2>5. 复现</h2>
@@ -89,9 +86,10 @@ python3 fetch.py ASLP-lab/HumDial-FDBench          $DATA/humdial_dl --jobs 1
 unzip -oq $DATA/humdial_dl/Humdial-Track2-Test.zip &quot;test/cn_test_nondev/*&quot; -d $DATA/humdial
 
 python3 build_manifests.py --dataset all --data $DATA --out manifests
-python3 baselines.py --manifest manifests/chorus.jsonl --mode silent --out predictions/silent__chorus.jsonl
-python3 score.py --manifest manifests/chorus.jsonl --pred predictions/silent__chorus.jsonl --sweep
+python3 make_mini.py --manifests manifests --out manifests/mini.jsonl      # 380 条最小集
+python3 rule_baseline.py --manifest manifests/mini.jsonl --out predictions/a0__mini.jsonl
+python3 score.py --manifest manifests/mini.jsonl --pred predictions/a0__mini.jsonl --sweep
 </code></pre>
 <hr/>
 <h2>6. 下一步</h2>
-<ol><li>补齐 WearVox 音频（~8GB）与 HumDial 英文（6.9GB）——需要磁盘空间</li><li>接模型跑 A0–A9（见《候选模型与评测方法.md》），先冒烟 100 条，再全量 2,595 条</li><li>用自建集补 S4</li></ol></body></html>
+<ol><li>全量跑批（3,309 条）——最小集已验通道，只差时间</li><li>解压 HumDial 英文（6.9 GB）补英文真实样本</li><li>自建 S4（200 条冒烟）+ S1 训练集（微调用）</li></ol></body></html>
