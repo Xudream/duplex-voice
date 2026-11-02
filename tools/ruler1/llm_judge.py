@@ -33,13 +33,41 @@ SYSTEM_PROMPT = """你是语音助手的"拒识裁判"，只判断这段语音�
 {"action": "respond|ack|wait|clarify|silent|silent_record", "confidence": 0.0-1.0, "reason": "不超过 20 字"}"""
 
 
-def build_user_prompt(sample, text):
+SYSTEM_V2 = SYSTEM_PROMPT + """
+
+补充判定规则（v2）：
+1. 转写可能来自**多个说话人**且没有说话人标记（无空间线索时的 ASR 流）。以**最后一句**为准；前面的话只当背景。
+2. 后面这几类话**不是**在对设备说话，应静默：对旁人陈述/闲聊、评价、抱怨、提及第三方、自言自语、念稿或念屏幕上的文字。
+3. 只有"需要设备提供信息或执行动作"的请求才 respond；单纯的情感表达或附和用 ack。""" 
+
+
+SYSTEM_V3 = SYSTEM_V2 + """
+
+输出格式（v3）：
+{"action": "...", "p_silent": 0-100 的整数, "confidence": 0.0-1.0, "reason": "≤20 字"}
+p_silent = 你认为"这句话不该由助手回"的概率（百分比），请给出连续分布的判断，不要总是 95/98。"""
+
+
+def build_user_prompt(sample, text, text_mode="full"):
     hist = sample.get("history") or []
     hist_txt = "\n".join(f"{'助手' if h.get('role')=='assistant' else '用户'}：{h.get('text','')}"
                          for h in hist[-5:]) or "（无）"
+    ctx = ""
+    if text_mode == "last":
+        segs = sample.get("segments") or []
+        cur = sample.get("target_text") or text
+        if len(segs) > 1:
+            ctx = "\n".join(x["text"] for x in segs[:-1])
+    else:
+        cur = text
+    if ctx:
+        return (f"系统状态：{'正在播报' if sample.get('system_state')=='speaking' else '空闲'}\n"
+                f"最近对话：\n{hist_txt}\n\n"
+                f"此前转写片段（背景，可能来自旁人/助手，不是待判内容）：{ctx}\n\n"
+                f"当前语音（待判，仅这一段）：{cur}\n\n请输出 JSON。")
     return (f"系统状态：{'正在播报' if sample.get('system_state')=='speaking' else '空闲'}\n"
             f"最近对话：\n{hist_txt}\n\n"
-            f"待判语音（转写）：{text}\n\n"
+            f"待判语音（转写）：{cur}\n\n"
             f"请输出 JSON。")
 
 
@@ -107,6 +135,9 @@ def main():
     ap.add_argument("--base-url", default="https://dashscope.aliyuncs.com/compatible-mode/v1")
     ap.add_argument("--model", default="qwen-plus")
     ap.add_argument("--api-key", default=None)
+    ap.add_argument("--prompt-version", choices=["v1", "v2", "v3"], default="v1")
+    ap.add_argument("--text-mode", choices=["full", "last"], default="last",
+                    help="last=只判当前 VAD 段（产品口径，HumDial 等多说话人集必需）")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--timeout", type=int, default=60)
     ap.add_argument("--sleep", type=float, default=0.0)
@@ -122,10 +153,11 @@ def main():
 
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     n_ok = n_invalid = 0
+    sys_prompt = {"v2": SYSTEM_V2, "v3": SYSTEM_V3}.get(a.prompt_version, SYSTEM_PROMPT)
     with open(a.out, "w", encoding="utf-8") as o:
         for s in samples:
             text = s.get("transcript") or ""
-            user_prompt = build_user_prompt(s, text)
+            user_prompt = build_user_prompt(s, text, a.text_mode)
             t0 = time.time()
             if a.backend == "dryrun":
                 raw = json.dumps({"action": "silent" if s.get("gold_scene") in NEG else "respond",
@@ -134,9 +166,9 @@ def main():
             else:
                 try:
                     if a.backend == "jev":
-                        raw = call_jev(a.base_url, a.model, key, SYSTEM_PROMPT, user_prompt, a.timeout)
+                        raw = call_jev(a.base_url, a.model, key, sys_prompt, user_prompt, a.timeout)
                     else:
-                        raw = call_openai_compat(a.base_url, a.model, key, SYSTEM_PROMPT, user_prompt, a.timeout)
+                        raw = call_openai_compat(a.base_url, a.model, key, sys_prompt, user_prompt, a.timeout)
                 except urllib.error.HTTPError as e:
                     raw = json.dumps({"action": "invalid", "confidence": 0.0,
                                       "reason": f"http{e.code}"})
@@ -147,9 +179,16 @@ def main():
                 if a.sleep:
                     time.sleep(a.sleep)
             act, conf, reason = parse_action(raw)
+            p_silent = None
+            try:
+                m2 = re.search(r'\{.*\}', raw or "", re.S)
+                if m2:
+                    p_silent = json.loads(m2.group(0)).get("p_silent")
+            except Exception:
+                p_silent = None
             n_ok += act != "invalid"
             n_invalid += act == "invalid"
-            o.write(json.dumps({"id": s["id"], "model": a.model, "action": act,
+            o.write(json.dumps({"id": s["id"], "model": a.model, "p_silent": p_silent, "action": act,
                                 "confidence": conf, "reason": reason, "latency_ms": lat,
                                 "raw": raw[:500] if isinstance(raw, str) else ""},
                                ensure_ascii=False) + "\n")

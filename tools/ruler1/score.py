@@ -69,6 +69,7 @@ def evaluate(manifest, preds, weights=DEFAULT_W, only_predicted=False):
             "id": i, "scene": g.get("gold_scene", "NA"),
             "gold": g.get("gold_action", ""), "pred": action,
             "conf": float(p.get("confidence", 1.0)) if p else 0.0,
+            "p_silent": (p.get("p_silent") if p else None),
             "exec": bool((p or {}).get("tool_call")) and action in RESPOND,
             "lang": g.get("gold_lang", "NA"), "dataset": g.get("dataset", "NA"),
         })
@@ -115,15 +116,25 @@ def evaluate(manifest, preds, weights=DEFAULT_W, only_predicted=False):
     }
 
 
-def work_point(res, thresholds=(0.05, 0.15, 0.25, 0.35, 0.5, 0.65, 0.75, 0.85, 0.95)):
-    """把低于阈值的澄清/响应视为静默，扫 FAR_w 与 FRR 的权衡。"""
+def work_point(res, thresholds=None):
+    """扫 FAR_w 与 FRR 的权衡。
+    有 p_silent（0-100）时按 p_silent >= t 判静默（细粒度，推荐）；
+    否则退回置信度回退（阈值 0-1，qwen 常饱和在 0.95/0.98，区分力差）。
+    """
+    has_p = any(r.get("p_silent") is not None for r in res["rows"])
+    if thresholds is None:
+        thresholds = list(range(50, 100, 5)) if has_p else (0.05, 0.15, 0.25, 0.35, 0.5, 0.65, 0.75, 0.85, 0.95)
     out = []
     for t in thresholds:
         per = defaultdict(lambda: [0, 0])
         for r in res["rows"]:
             if r["scene"] not in DEFAULT_W and r["scene"] != "S0":
                 continue
-            silent = r["pred"] in SILENT or (r["pred"] in (RESPOND | CLARIFY) and r["conf"] < t)
+            # 任何非静默动作都可在低置信度下回退静默（原先漏了 ack/wait，导致阈值扫不动）
+            if has_p and r.get("p_silent") is not None:
+                silent = r["pred"] in SILENT or r["p_silent"] >= t
+            else:
+                silent = r["pred"] in SILENT or (r["pred"] not in SILENT and r["conf"] < t)
             bucket = per[r["scene"]]
             bucket[1] += 1
             if silent:

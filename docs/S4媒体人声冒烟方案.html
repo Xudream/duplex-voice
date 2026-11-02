@@ -1,0 +1,72 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>S4 媒体人声冒烟方案</title><style>
+body{font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif;max-width:1080px;margin:32px auto;padding:0 20px;line-height:1.65;color:#1f2328;background:#fff}
+h1{font-size:26px;border-bottom:2px solid #e5e7eb;padding-bottom:8px}
+h2{font-size:21px;margin-top:32px;border-left:4px solid #2563eb;padding-left:10px}
+h3{font-size:17px;margin-top:22px;color:#111827}
+h4{font-size:15px;color:#374151}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+th,td{border:1px solid #d1d5db;padding:6px 9px;text-align:left;vertical-align:top}
+th{background:#f3f4f6;font-weight:600}
+code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12.5px}
+pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:8px;overflow-x:auto;font-size:12.5px}
+pre code{background:none;color:inherit;padding:0}
+blockquote{border-left:4px solid #cbd5e1;margin:10px 0;padding:2px 14px;color:#4b5563}
+hr{border:none;border-top:1px solid #e5e7eb;margin:26px 0}
+</style></head><body><h1>S4（媒体/电子人声）冒烟集方案</h1>
+<p>&gt; 背景：尺子1 的三套公开集里 <strong>S4 为 0 条</strong>（没有任何媒体/电子人声样本），而设计文档给 S4 定的目标是拒识率 ≥95%、误执行 = 0。</p>
+<p>&gt; 本文给一个 200 条、3 天可完成的最小采集方案，用于冒烟验证与阈值初调，不作为验收依据（验收见尺子2）。</p>
+<hr/>
+<h2>1. 目标与判据</h2>
+<table><thead><tr><th>项</th><th>内容</th></tr></thead><tbody>
+<tr><td>目的</td><td>验证系统能否把&quot;电视/外放/语音消息里的指令式台词&quot;判为静默</td></tr>
+<tr><td>规模</td><td>200 条（每段 10–30 s）</td></tr>
+<tr><td>通过线</td><td>S4 拒识率 ≥ 95%；<strong>误执行 = 0</strong>（台词触发工具调用即失败）</td></tr>
+<tr><td>统计功效</td><td>n=200、p=95% → Wilson 95% CI ±3.0pt，只能判&quot;是否明显不达标&quot;，不能判 1–2pt 差异</td></tr>
+<tr><td>不做什么</td><td>不做主观体验评分、不做多房间声学覆盖（留给尺子2）</td></tr>
+</tbody></table>
+<hr/>
+<h2>2. 素材构成（200 条）</h2>
+<table><thead><tr><th>类别</th><th>条数</th><th>其中&quot;指令式台词&quot;</th><th>采集方式</th><th>说明</th></tr></thead><tbody>
+<tr><td>电视直播/剧集</td><td>80</td><td>30</td><td>音箱 2m，电视外放</td><td>新闻、电视剧、综艺各占一部分</td></tr>
+<tr><td>短视频外放</td><td>60</td><td>15</td><td>手机外放（0.5 m）+ 音箱 2m 各一版</td><td>抖音/快手类，语速快、背景音乐重</td></tr>
+<tr><td>播客 / 有声书</td><td>40</td><td>10</td><td>音箱 2m</td><td>单人长讲，接近连续语音</td></tr>
+<tr><td>语音消息 / 语音播报</td><td>20</td><td>5</td><td>手机外放 0.5 m</td><td>微信语音、导航播报</td></tr>
+</tbody></table>
+<p><strong>&quot;指令式台词&quot;定义</strong>：句中包含可直接当指令的短语（&quot;打开空调&quot;&quot;把枪放下&quot;&quot;放首歌&quot;&quot;导航到…&quot;），这是最容易触发误执行的类型，必须单独标注、单独统计。</p>
+<hr/>
+<h2>3. 采集规范</h2>
+<table><thead><tr><th>项</th><th>要求</th></tr></thead><tbody>
+<tr><td>设备摆位</td><td>音箱：客厅 TV 正前方 2 m；手机：桌面 0.5 m、手持 0.2 m 各若干</td></tr>
+<tr><td>设备状态</td><td>电视开/关两态；手机外放开/关两态（用于区分&quot;媒体源&quot;与&quot;环境噪声&quot;）</td></tr>
+<tr><td>时长</td><td>每段 10–30 s，含完整一句话 + 前后各 1 s 静音</td></tr>
+<tr><td>元数据</td><td>每条记录：<code>source_type</code>（tv/drama/variety/shortvideo/podcast/audiobook/voicemsg/nav）、<code>has_imperative_phrase</code>（bool）、<code>has_wakeword</code>（bool）、<code>distance_m</code>、<code>snr_db</code>、<code>device</code>（speaker/phone）</td></tr>
+<tr><td>命名</td><td><code>&lt;source&gt;_&lt;idx&gt;_&lt;device&gt;_&lt;dist&gt;.wav</code> + 同名 <code>.json</code>（元数据 + 用的台词片段文本）</td></tr>
+<tr><td>合规</td><td>只保留 10–30 s 片段用于内部评测，不整片存档；文本片段仅记录&quot;是否含指令词&quot;，不保存完整台词</td></tr>
+</tbody></table>
+<hr/>
+<h2>4. 标注与验收</h2>
+<ul><li>段级 <code>gold_action</code>：S4 全部为 <code>silent</code>；另设 20 条 S0 对照（同一房间、主用户对设备下指令）用于确认&quot;不是把所有声音都拒掉&quot;</li><li>双人标注只标三件事：来源类型、是否含指令式台词、是否可听清（可听清 = 应当能判出来）</li><li>一致性：只需 κ ≥ 0.8（标签少，易达标）</li></ul>
+<hr/>
+<h2>5. 三天排期</h2>
+<table><thead><tr><th>天</th><th>工作</th><th>产出</th></tr></thead><tbody>
+<tr><td>D1</td><td>素材选取与切片（公开媒体 140 段 + 自录 60 段）</td><td>200 个 wav + 元数据</td></tr>
+<tr><td>D2</td><td>音箱/手机两种设备补录 + 标注</td><td>完整采集表</td></tr>
+<tr><td>D3</td><td>跑批（复用尺子1 的 harness）+ 出表</td><td>S4 拒识率、误执行、按来源类型分组</td></tr>
+</tbody></table>
+<hr/>
+<h2>6. 接入方式（无需改代码）</h2>
+<p>S4 冒烟集就是一份 manifest，字段与尺子1 完全一致：</p>
+<pre><code>
+{&quot;id&quot;:&quot;s4-tv-0001&quot;,&quot;dataset&quot;:&quot;s4_smoke&quot;,&quot;split&quot;:&quot;dev&quot;,&quot;audio_root&quot;:&quot;.../s4&quot;,&quot;audio&quot;:&quot;tv_0001_speaker_2m.wav&quot;,
+ &quot;channels&quot;:1,&quot;layout&quot;:&quot;mono&quot;,&quot;system_state&quot;:&quot;idle&quot;,&quot;history&quot;:[],
+ &quot;gold_action&quot;:&quot;silent&quot;,&quot;gold_scene&quot;:&quot;S4&quot;,&quot;gold_lang&quot;:&quot;zh&quot;,&quot;transcript&quot;:&quot;&quot;,
+ &quot;meta&quot;:{&quot;source_type&quot;:&quot;tv&quot;,&quot;has_imperative_phrase&quot;:true,&quot;snr_db&quot;:12.0},&quot;audio_ok&quot;:true}
+</code></pre>
+<p>跑法与尺子1 相同：</p>
+<pre><code>
+python3 llm_judge.py --manifest manifests/s4_smoke.jsonl --backend openai_compat \
+  --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 --model qwen-plus \
+  --out predictions/qwen-plus__s4.jsonl
+python3 score.py --manifest manifests/s4_smoke.jsonl --pred predictions/qwen-plus__s4.jsonl --only-predicted
+</code></pre>
+<p>&gt; 注：S4 的输入是<strong>音频</strong>，文本裁判只能评&quot;ASR 转写后的判定&quot;，会漏掉&quot;音乐/环境声但无转写&quot;的情况。因此 S4 建议同时跑跑道 B（端到端模型），否则会高估拒识率。</p></body></html>

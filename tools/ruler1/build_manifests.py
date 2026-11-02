@@ -168,6 +168,27 @@ def _humdial_text(idir, stem):
     return ""
 
 
+def _humdial_segments(idir, stem):
+    """返回 [{start,end,text}]；产品口径只判最后一段（当前 VAD 段）。"""
+    for name in (stem + ".json", stem + "_timestamp.json"):
+        fp = os.path.join(idir, name)
+        if not os.path.exists(fp):
+            continue
+        try:
+            d = json.load(open(fp, encoding="utf-8"))
+        except Exception:
+            continue
+        segs = d.get("speech_segments") or d.get("segments") or []
+        out = []
+        for x in segs:
+            t = (x.get("text") or "").strip()
+            if t:
+                out.append({"start": x.get("xmin", x.get("start")), "end": x.get("xmax", x.get("end")), "text": t})
+        if out:
+            return out
+    return []
+
+
 def build_humdial(root, out, splits=("test",), include_en=False):
     rows = []
     for split in splits:
@@ -191,6 +212,7 @@ def build_humdial(root, out, splits=("test",), include_en=False):
                         continue
                     stem = f[:-4]
                     clean_rel = f"clean_{f}"
+                    _seg = _humdial_segments(idir, stem)
                     rows.append({
                         "id": f"humdial-{split}-{lang}-{intent}-{stem}",
                         "dataset": "humdial", "split": split,
@@ -200,6 +222,8 @@ def build_humdial(root, out, splits=("test",), include_en=False):
                         "system_state": "idle", "history": [],
                         "gold_action": gold, "gold_scene": scene, "gold_lang": lang,
                         "transcript": _humdial_text(idir, stem),
+                        "segments": _seg,
+                        "target_text": (_seg[-1]["text"] if _seg else ""),
                         "meta": {"intent": intent, "lang_dir": lang_dir},
                     })
     if rows:

@@ -1,0 +1,114 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>尺子1 首轮结果：Qwen 文本裁判</title><style>
+body{font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif;max-width:1080px;margin:32px auto;padding:0 20px;line-height:1.65;color:#1f2328;background:#fff}
+h1{font-size:26px;border-bottom:2px solid #e5e7eb;padding-bottom:8px}
+h2{font-size:21px;margin-top:32px;border-left:4px solid #2563eb;padding-left:10px}
+h3{font-size:17px;margin-top:22px;color:#111827}
+h4{font-size:15px;color:#374151}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+th,td{border:1px solid #d1d5db;padding:6px 9px;text-align:left;vertical-align:top}
+th{background:#f3f4f6;font-weight:600}
+code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12.5px}
+pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:8px;overflow-x:auto;font-size:12.5px}
+pre code{background:none;color:inherit;padding:0}
+blockquote{border-left:4px solid #cbd5e1;margin:10px 0;padding:2px 14px;color:#4b5563}
+hr{border:none;border-top:1px solid #e5e7eb;margin:26px 0}
+</style></head><body><h1>尺子1 首轮结果：Qwen 文本裁判（最小集 380 条）</h1>
+<p>&gt; 日期：2026-11-01　｜　样本：<code>manifests/mini.jsonl</code>（380 条）　｜　跑道：A（gold 转写）</p>
+<p>&gt; 结论先说：<strong>通用 Qwen 直接当裁判不达标</strong>（最好一次 S1 75.8%、FRR 21.7%），但链路、口径、工装已全部跑通，且暴露出三个必须修的问题。</p>
+<hr/>
+<h2>1. API key 可用性（先答&quot;key 能不能用&quot;）</h2>
+<table><thead><tr><th>模型</th><th>结果</th><th>延迟</th><th>说明</th></tr></thead><tbody>
+<tr><td>qwen-plus</td><td>✅ 可用</td><td>460 ms</td><td>本轮主力</td></tr>
+<tr><td>qwen-max</td><td>✅ 可用</td><td>450 ms</td><td>更强但更爱 clarify（21.3%）</td></tr>
+<tr><td>qwen-flash</td><td>✅ 可用</td><td>300 ms</td><td>便宜快，精度最低</td></tr>
+<tr><td>qwen-turbo</td><td>❌ 429「已超过请求限额」</td><td>—</td><td>该模型被限流，非 key 失效</td></tr>
+<tr><td>qwen3.5-plus</td><td>❌ 403「免费额度耗尽」</td><td>—</td><td>需付费开通</td></tr>
+<tr><td>qwen3-max</td><td>❌ 404「Model not exist」</td><td>—</td><td>名字不存在</td></tr>
+</tbody></table>
+<p>&gt; key 本身有效，未做任何删除。之前判断的&quot;整体 429&quot;其实是<strong>模型级限流</strong>，换 qwen-plus 即可用。</p>
+<hr/>
+<h2>2. 最小集构成（<code>make_mini.py</code> 分层抽样）</h2>
+<table><thead><tr><th>维度</th><th>分布</th></tr></thead><tbody>
+<tr><td>总数</td><td>380</td></tr>
+<tr><td>场景</td><td>S1 120 / S2 90 / S3 60 / S0 60 / S0_guest 20 / REG 30</td></tr>
+<tr><td>数据集</td><td>chorus 180 / humdial 100 / wearvox 100</td></tr>
+<tr><td>语言</td><td>zh 280 / en 100</td></tr>
+</tbody></table>
+<hr/>
+<h2>3. 结果总表（同一批 380 条，temperature=0）</h2>
+<table><thead><tr><th>运行</th><th>S1 拒识</th><th>S2</th><th>S3</th><th>FAR_w</th><th>FRR(S0)</th><th>clarify</th><th>p50</th></tr></thead><tbody>
+<tr><td>qwen-flash / 整段 / v1</td><td>35.0%</td><td>32.2%</td><td>60.0%</td><td>57.7%</td><td>6.7%</td><td>2.4%</td><td>528 ms</td></tr>
+<tr><td>qwen-plus / 整段 / v1</td><td>38.3%</td><td>34.4%</td><td>63.3%</td><td>54.6%</td><td>5.0%</td><td>4.5%</td><td>1052 ms</td></tr>
+<tr><td>qwen-max / 整段 / v1</td><td>30.0%</td><td>32.2%</td><td>61.7%</td><td>59.7%</td><td>6.7%</td><td><strong>21.3%</strong></td><td>1061 ms</td></tr>
+<tr><td>qwen-plus / 整段 / v2</td><td>53.3%</td><td>67.8%</td><td>75.0%</td><td>37.2%</td><td>21.7%</td><td>2.9%</td><td>1048 ms</td></tr>
+<tr><td>qwen-plus / 当前段 / v1</td><td>57.5%</td><td>32.2%</td><td>63.3%</td><td>45.4%</td><td>6.7%</td><td>4.2%</td><td>1023 ms</td></tr>
+<tr><td><strong>qwen-plus / 当前段 / v3</strong></td><td><strong>75.8%</strong></td><td>58.9%</td><td>71.7%</td><td><strong>28.7%</strong></td><td>21.7%</td><td>2.1%</td><td>1044 ms</td></tr>
+</tbody></table>
+<p>三条参照线：S1 ≥ 80%（硬门槛）、FRR ≤ 5%、误执行 = 0（全部运行为 0 ✅）。</p>
+<hr/>
+<h2>4. 三个发现</h2>
+<h3>4.1 最大的杠杆不是模型，是&quot;喂哪段文本&quot;（+19.2pt，零代价）</h3>
+<p>HumDial 的样本是「先两轮对助手的提问 + 最后一段转向旁人」，我最初把整段拼成一条转写喂给模型，模型看到开头两个提问就判&quot;该响应&quot;：</p>
+<p>&gt; qwen-plus 的失败理由原文：<strong>&quot;连续两个技术问题，明显对助手提问&quot;</strong> → respond</p>
+<p>humdial/S1 因此是 <strong>0%</strong>。改成只喂当前 VAD 段（<code>--text-mode last</code>）后：</p>
+<table><thead><tr><th></th><th>humdial/S1</th><th>整体 S1</th><th>FRR</th></tr></thead><tbody>
+<tr><td>整段</td><td>0%</td><td>38.3%</td><td>5.0%</td></tr>
+<tr><td>当前段</td><td>55%</td><td>57.5%</td><td>6.7%</td></tr>
+</tbody></table>
+<p><strong>这不是模型问题，是协议问题</strong>：真实产品里 VAD 已经分了段，只该判当前段。尺子1 的 runner 默认值已改为 <code>--text-mode last</code>。</p>
+<h3>4.2 提示词规则再加 +18.3pt，但代价是 FRR 翻三倍</h3>
+<p>v2 加了两条规则（多说话人以最后一句为准、对旁人陈述/念稿不算请求）：</p>
+<table><thead><tr><th></th><th>S1</th><th>S2</th><th>S3</th><th>FAR_w</th><th>FRR</th></tr></thead><tbody>
+<tr><td>当前段 + v1</td><td>57.5%</td><td>32.2%</td><td>63.3%</td><td>45.4%</td><td>6.7%</td></tr>
+<tr><td>当前段 + v2</td><td>73.3%</td><td>57.8%</td><td>75.0%</td><td>29.1%</td><td>16.7%</td></tr>
+<tr><td>当前段 + v3</td><td>75.8%</td><td>58.9%</td><td>71.7%</td><td>28.7%</td><td>21.7%</td></tr>
+</tbody></table>
+<p><strong>拒识率是被&quot;更爱闭嘴&quot;换来的</strong>，不是判得更准。这条曲线说明：靠 prompt 调不动工作点，只能整体平移。</p>
+<h3>4.3 置信度不可用：模型自信地错，工作点扫不出来</h3>
+<p>qwen 输出的 <code>confidence</code> 只落在 <strong>0.95 和 0.98</strong> 两个值上，阈值扫描完全不动（0.05→0.95 的结果一模一样）。</p>
+<p>改让模型输出 <code>p_silent</code>（0–100 连续值）后分布是双峰的：97（181 条）vs 5/10/15（154 条）——<strong>看起来可分，实际不可用</strong>：</p>
+<table><thead><tr><th>指标</th><th>数值</th></tr></thead><tbody>
+<tr><td>S0（应响应）p_silent 中位数</td><td>5</td></tr>
+<tr><td>S1–S3（应静默）p_silent 中位数</td><td>97</td></tr>
+<tr><td>AUC（p_silent 区分应静默/应响应）</td><td><strong>0.780</strong></td></tr>
+<tr><td>S0 中 p_silent ≥ 90（<strong>自信地判错</strong>）</td><td><strong>22%</strong></td></tr>
+<tr><td>S0 中 p_silent ≤ 20</td><td>77%</td></tr>
+</tbody></table>
+<p>那 22% 自信判错的样本在任何阈值下都静默 → <strong>FRR 的地板就是 21.7%</strong>，无论阈值怎么调都过不了 5% 的门槛。</p>
+<hr/>
+<h2>5. 分集诊断（当前段 + v3）</h2>
+<table><thead><tr><th>集</th><th>S1</th><th>S2</th><th>S3</th><th>判断</th></tr></thead><tbody>
+<tr><td>chorus</td><td>78%</td><td>87%</td><td>93%</td><td>可用；TTS 合成、声学干净</td></tr>
+<tr><td>wearvox</td><td>78%</td><td>—</td><td>57%</td><td>S1 可用；旁人对旁人（S3）偏弱</td></tr>
+<tr><td>humdial</td><td>65%</td><td><strong>29%</strong></td><td>—</td><td>真实中文数据，S2 几乎不可分</td></tr>
+</tbody></table>
+<p>humdial/S2（旁人对该用户说）只有 29%：<strong>没有说话人标记时，&quot;旁人问他&quot;和&quot;他问助手&quot;在文本上无法区分</strong>——这不是模型能力问题，而是文本通道的信息上限。要解决只能加空间线索（双声道/DoA）或说话人分离。</p>
+<hr/>
+<h2>6. 结论</h2>
+<table><thead><tr><th>判据</th><th>要求</th><th>实测最好</th><th>结论</th></tr></thead><tbody>
+<tr><td>S1 拒识</td><td>≥ 80%</td><td>75.8%</td><td>❌ 差 4.2pt</td></tr>
+<tr><td>FRR</td><td>≤ 5%</td><td>21.7%（地板）</td><td>❌ 差 16.7pt</td></tr>
+<tr><td>误执行</td><td>0</td><td>0</td><td>✅</td></tr>
+<tr><td>invalid</td><td>≤ 1%</td><td>0.53%</td><td>✅</td></tr>
+<tr><td>延迟 p50</td><td>≤ 300 ms（端侧）/ ≤ 800 ms（云）</td><td>1044 ms</td><td>⚠️ 云端可用、端侧不可用</td></tr>
+</tbody></table>
+<p><strong>通用 Qwen 直接当裁判：淘汰。</strong> 但这不是&quot;这条路不通&quot;，而是三条明确的改进路径：</p>
+<ol><li><strong>专用小模型</strong>（0.6B–4B 微调）：S1 训练数据来自自建集（FDBench 的 SDO 训练集是 0 条），这是唯一能同时拿到高 S1 和低 FRR 的路</li><li><strong>加空间线索</strong>：双声道/DoA 解决 humdial/S2 与 wearvox/S3，文本通道到顶了</li><li><strong>模型级联</strong>：0.6B 先筛（低延迟），9B 复判（高精度），这正是 L3 快慢融合的形态</li></ol>
+<hr/>
+<h2>7. 复现</h2>
+<pre><code>
+cd ~/repos/projects/duplex-voice/tools/ruler1
+DATA=~/.hermes/workspace/ruler1/data
+
+python3 build_manifests.py --dataset all --data $DATA --out manifests   # 加 segments/target_text
+python3 make_mini.py --manifests manifests --out manifests/mini.jsonl    # 380 条分层抽
+
+python3 llm_judge.py --manifest manifests/mini.jsonl --backend openai_compat \
+  --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  --model qwen-plus --text-mode last --prompt-version v3 \
+  --out predictions/qwen-plus-last-v3__mini.jsonl
+
+python3 score.py --manifest manifests/mini.jsonl \
+  --pred predictions/qwen-plus-last-v3__mini.jsonl --only-predicted --sweep
+</code></pre>
+<p>本轮 6 次运行的原始预测在 <code>/tmp/r1/pred/</code>，报告在 <code>/tmp/r1/reports/</code>（本地，不入库）。</p></body></html>
