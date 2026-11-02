@@ -10,6 +10,7 @@ tools/ruler1/
 ├── build_manifests.py   # 公开集 → manifests/*.jsonl（S0–S4 映射）
 ├── fetch.py             # 从 hf-mirror 直连下载（绕开 hf CLI 的 metadata 校验问题）
 ├── baselines.py         # 平凡基线 all_silent / all_respond / oracle（定地板与天花板）
+├── llm_judge.py         # 被测系统适配器：openai_compat / jev / dryrun 三种后端
 ├── score.py             # 分场景拒识率 / FAR_w / FRR / clarify / invalid / 误执行 + Wilson CI + 工作点扫描
 └── stats.py             # McNemar、Bootstrap AUC 差、最小可分辨差
 ```
@@ -39,7 +40,14 @@ python3 build_manifests.py --dataset all --data ~/.hermes/workspace/ruler1/data 
 python3 baselines.py --manifest manifests/chorus.jsonl --mode silent  --out predictions/silent__chorus.jsonl
 python3 baselines.py --manifest manifests/chorus.jsonl --mode respond --out predictions/respond__chorus.jsonl
 
-# 4) 判分（--sweep 出工作点曲线；--baseline-pred 出 McNemar）
+# 4) 接被测模型（跑道 A：用集自带转写；--backend dryrun 用于链路自检）
+python3 llm_judge.py --manifest manifests/chorus.jsonl --backend dryrun --limit 120 \
+  --out predictions/dryrun__chorus.jsonl
+DASHSCOPE_API_KEY=... python3 llm_judge.py --manifest manifests/chorus.jsonl \
+  --backend openai_compat --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  --model qwen-plus --out predictions/qwen-plus__chorus.jsonl
+
+# 5) 判分（--sweep 出工作点曲线；--baseline-pred 出 McNemar；子集跑分加 --only-predicted）
 python3 score.py --manifest manifests/chorus.jsonl \
   --pred predictions/silent__chorus.jsonl --sweep --report reports/silent__chorus.md
 ```

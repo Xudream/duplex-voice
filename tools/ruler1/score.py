@@ -49,7 +49,7 @@ def norm_action(a):
     return alias.get(a, a if a in VALID else "invalid")
 
 
-def evaluate(manifest, preds, weights=DEFAULT_W):
+def evaluate(manifest, preds, weights=DEFAULT_W, only_predicted=False):
     gold = {m["id"]: m for m in manifest}
     pred = {}
     for p in preds:
@@ -57,6 +57,10 @@ def evaluate(manifest, preds, weights=DEFAULT_W):
             pred[p["id"]] = p
 
     missing = len(gold) - len(pred)
+    if only_predicted:
+        # 冒烟场景：只对"有预测"的样本出分（缺预测不算错，避免小样本跑分被拉低）
+        gold = {i: g for i, g in gold.items() if i in pred}
+        missing = 0
     rows = []
     for i, g in gold.items():
         p = pred.get(i)
@@ -166,11 +170,13 @@ def main():
     ap.add_argument("--baseline-pred", default=None)
     ap.add_argument("--report", default=None)
     ap.add_argument("--sweep", action="store_true")
+    ap.add_argument("--only-predicted", action="store_true",
+                    help="只评有预测的样本（冒烟/子集用）")
     args = ap.parse_args()
 
     manifest = load_jsonl(args.manifest)
     preds = load_jsonl(args.pred)
-    res = evaluate(manifest, preds)
+    res = evaluate(manifest, preds, only_predicted=args.only_predicted)
 
     extra = []
     if args.sweep:
