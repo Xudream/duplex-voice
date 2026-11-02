@@ -1,0 +1,143 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>候选模型与评测方法</title><style>
+body{font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif;max-width:1080px;margin:32px auto;padding:0 20px;line-height:1.65;color:#1f2328;background:#fff}
+h1{font-size:26px;border-bottom:2px solid #e5e7eb;padding-bottom:8px}
+h2{font-size:21px;margin-top:32px;border-left:4px solid #2563eb;padding-left:10px}
+h3{font-size:17px;margin-top:22px;color:#111827}
+h4{font-size:15px;color:#374151}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+th,td{border:1px solid #d1d5db;padding:6px 9px;text-align:left;vertical-align:top}
+th{background:#f3f4f6;font-weight:600}
+code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12.5px}
+pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:8px;overflow-x:auto;font-size:12.5px}
+pre code{background:none;color:inherit;padding:0}
+blockquote{border-left:4px solid #cbd5e1;margin:10px 0;padding:2px 14px;color:#4b5563}
+hr{border:none;border-top:1px solid #e5e7eb;margin:26px 0}
+</style></head><body><h1>候选模型清单与评测方法</h1>
+<p>&gt; 配套：<code>尺子1构建报告.md</code>（数据规模）、<code>sidetalk评测集构建方案.md</code>（口径）、<code>拒识sideTalk设计文档.md</code>（模块边界）</p>
+<p>&gt; 用途：用尺子1 把候选模型筛到 2 个，交给尺子2 定选</p>
+<p>&gt; 版本：v1.0　｜　2026-11-01</p>
+<hr/>
+<h2>1. 候选池：两条跑道</h2>
+<h3>1.1 跑道 A：文本裁判（主跑道）</h3>
+<p>输入 = 转写 + 系统态 + 5 轮历史；输出 = 动作 JSON。这是&quot;外挂裁判&quot;路线的最小验证形态。</p>
+<table><thead><tr><th>#</th><th>候选</th><th>形态</th><th>部署</th><th>成本口径【估算】</th><th>为什么进候选</th><th>备注</th></tr></thead><tbody>
+<tr><td>A0</td><td><strong>规则 + 字符 n-gram/BERT 分类器</strong></td><td>判据可解释</td><td>端侧/CPU</td><td>0</td><td><strong>必跑基线</strong>：不跑它不知道 LLM 到底加了多少分</td><td>用 train 集训，测试集不碰</td></tr>
+<tr><td>A1</td><td>Qwen3-0.6B</td><td>开源 LLM</td><td>端侧 NPU 可行</td><td>电费</td><td>端侧 L2 的最低成本档</td><td>指令遵循弱，看它能否守住协议</td></tr>
+<tr><td>A2</td><td>Qwen3-1.7B</td><td>开源 LLM</td><td>端侧/单卡</td><td>电费</td><td>端侧 L2 主力候选</td><td>需实测 NPU 延迟（10–50ms 存疑）</td></tr>
+<tr><td>A3</td><td>Qwen3-4B</td><td>开源 LLM</td><td>单卡 A10/A100</td><td>电费</td><td>精度与端侧折中</td><td>量化后显存 ~3GB</td></tr>
+<tr><td>A4</td><td>Qwen3.5-4B</td><td>开源 LLM</td><td>单卡</td><td>电费</td><td>新代际，中文更强</td><td>需核对许可与量化可用性</td></tr>
+<tr><td>A5</td><td>Qwen3.5-9B</td><td>开源 LLM</td><td>24G 卡</td><td>电费</td><td>强基线（也是 L3 小脑候选）</td><td>延迟偏高，适合做 L3 复判</td></tr>
+<tr><td>A6</td><td>DeepSeek-V4-Flash</td><td>托管 API</td><td>云</td><td>按 token</td><td>低价快模型</td><td>需确认是否支持 JSON 约束</td></tr>
+<tr><td>A7</td><td>DeepSeek-V4-Pro</td><td>托管 API</td><td>云</td><td>按 token</td><td>强推理，做 L3 强分支</td><td>不适合每轮调用</td></tr>
+<tr><td>A8</td><td>GLM / 豆包（各取一档）</td><td>托管 API</td><td>云</td><td>按 token</td><td>横向对照，避免单一供应商偏差</td><td>用同一 prompt</td></tr>
+<tr><td>A9</td><td><strong>Jev（TypeSafe System One）</strong></td><td>有界决策模型</td><td>托管 API（无权重）</td><td>$0.042/M input</td><td>决策型模型的代表：0% 类型错误、带校准置信度</td><td>不能端侧；需评估数据出境</td></tr>
+</tbody></table>
+<p>&gt; 跑道 A 里 <strong>A0 是必跑项</strong>，A1–A9 建议全跑（成本 &lt; ¥100），因为裁判模型的差异往往只有 2–4pt，样本量足够才能分辨。</p>
+<h3>1.2 跑道 B：端到端语音模型（对照组）</h3>
+<p>输入 = 原始音频；输出 = 响应/静默。用来量化&quot;模型自带拒识&quot;的上界，以及外挂路线还差多少。</p>
+<table><thead><tr><th>#</th><th>候选</th><th>形态</th><th>可私有化</th><th>拒识相关公开证据</th><th>备注</th></tr></thead><tbody>
+<tr><td>B1</td><td>Qwen-Audio-3.1-Realtime</td><td>云端实时</td><td>否</td><td>FD-Bench v1.5 背景语音响应 73%→13%</td><td>官方文档明确支持 <code>smart_turn</code> + 说话人增强</td></tr>
+<tr><td>B2</td><td>豆包 Seeduplex 3.0</td><td>云端实时</td><td>否</td><td>端到端全双工；官方文档</td><td>需确认是否开放&quot;拒识/静默&quot;显式控制</td></tr>
+<tr><td>B3</td><td>腾讯 Gander</td><td>开源（Apache-2.0）</td><td>是</td><td>FD-Bench v3 接管 100% / 抢话 8.0%</td><td>自部署成本高（≈9B），适合做上界参照</td></tr>
+<tr><td>B4</td><td>GLM-Realtime</td><td>云端</td><td>否</td><td>音视频通话，2 分钟记忆</td><td>价格 0.18 元/分钟（音频）</td></tr>
+<tr><td>B5</td><td>Step-Audio 2 mini</td><td>开源</td><td>是</td><td>URO Bench 开源最高（自报）</td><td>轻量，适合跑通链路</td></tr>
+<tr><td>B6</td><td>Moshi</td><td>开源</td><td>是</td><td>全双工可打断</td><td>英文为主，做参照</td></tr>
+</tbody></table>
+<h3>1.3 选型时要看的五个维度</h3>
+<table><thead><tr><th>维度</th><th>权重</th><th>判据</th></tr></thead><tbody>
+<tr><td>拒识能力（S1 为主）</td><td>30</td><td>尺子1 分场景拒识率</td></tr>
+<tr><td>代价（FRR@S0）</td><td>25</td><td>工作点曲线：固定 FAR 下的 FRR</td></tr>
+<tr><td>可部署（端侧/私有化）</td><td>15</td><td>硬约束：必须能私有化或端侧</td></tr>
+<tr><td>延迟</td><td>15</td><td>决策延迟 P50/P90</td></tr>
+<tr><td>成本</td><td>15</td><td>每千次决策 ¥</td></tr>
+</tbody></table>
+<hr/>
+<h2>2. 评测方法（可直接执行）</h2>
+<h3>2.1 四组实验矩阵</h3>
+<table><thead><tr><th>组</th><th>跑道</th><th>输入</th><th>目的</th></tr></thead><tbody>
+<tr><td>E1</td><td>A</td><td><strong>gold 转写</strong></td><td>裁判能力上限（排除 ASR 干扰）</td></tr>
+<tr><td>E2</td><td>A</td><td><strong>真实 ASR 转写</strong></td><td>真实链路能力（与产品一致）</td></tr>
+<tr><td>E3</td><td>B</td><td>原始音频</td><td>端到端上界</td></tr>
+<tr><td>E4</td><td>A</td><td>gold 转写 + 打乱历史</td><td>消融：历史到底有没有用</td></tr>
+</tbody></table>
+<p>E1 与 E2 的差值 = <strong>ASR 误差传导</strong>，这是决定&quot;要不要为 ASR 升级付费&quot;的唯一硬证据。</p>
+<h3>2.2 统一动作协议</h3>
+<pre><code>
+{&quot;action&quot;:&quot;respond|ack|wait|clarify|silent|silent_record&quot;,&quot;confidence&quot;:0.0,&quot;reason&quot;:&quot;≤20 字&quot;}
+</code></pre>
+<p>解析规则（<code>llm_judge.py</code> 已实现）：</p>
+<ol><li>非 JSON / 动作越界 → <code>invalid</code>（单独计数，&gt;1% 该模型出局）</li><li><code>clarify</code> 单列，不计入拒识率分子、不计入 FAR</li><li><code>silent_record</code> 与 <code>silent</code> 在指标上等价</li></ol>
+<h3>2.3 三阶段执行</h3>
+<table><thead><tr><th>阶段</th><th>样本</th><th>目的</th><th>通过条件</th></tr></thead><tbody>
+<tr><td>冒烟</td><td>每集 100 条（分层抽）</td><td>验证协议、暴露 prompt 问题</td><td>invalid &lt;1%、无 429</td></tr>
+<tr><td>全量</td><td>2,595 条（音频就位部分）</td><td>出正式表</td><td>全部模型同批样本</td></tr>
+<tr><td>复跑</td><td>全量的 10%</td><td>稳定性（temperature=0 应 100% 一致）</td><td>不一致率 &lt;1%，否则查采样</td></tr>
+</tbody></table>
+<h3>2.4 指标与统计</h3>
+<table><thead><tr><th>指标</th><th>口径</th></tr></thead><tbody>
+<tr><td>分场景拒识率</td><td>按 S1/S2/S3 分别出（S4 暂无样本）</td></tr>
+<tr><td>FAR_w</td><td>Σ w_s(1−Rej_s)，w = S1 0.40 / S2 0.15 / S3 0.25 / S4 0.20（缺项自动归一）</td></tr>
+<tr><td>FRR</td><td>S0 被置静默的比例（S0_guest 单列，不计入）</td></tr>
+<tr><td>误执行</td><td>一票否决</td></tr>
+<tr><td>决策延迟</td><td>P50/P90（从提交到拿到动作）</td></tr>
+<tr><td>工作点</td><td>扫 confidence 0.05–0.95，报「FAR_w=5% 处的 FRR」与「FRR=3% 处的 FAR_w」</td></tr>
+<tr><td>显著性</td><td>Wilson CI；同批样本两模型用 McNemar；AUC 差用 bootstrap 1000 次；多模型 Holm 校正</td></tr>
+</tbody></table>
+<p><strong>报数纪律</strong>：差异小于 CI 宽度就写&quot;不可区分&quot;。当前样本量下（见 §3）可分辨的最小差异约 2–4pt。</p>
+<h3>2.5 淘汰与提名</h3>
+<p>硬淘汰（任一触发）：误执行 &gt;0、invalid &gt;1%、S1 拒识 &lt;80%、P90 延迟 &gt;800ms、无法私有化。</p>
+<p>通过后按 §1.3 加权排序，取前 2 名进入尺子2（自建集 + 真机）。</p>
+<h3>2.6 成本与时间【估算】</h3>
+<table><thead><tr><th>项</th><th>数量</th><th>估算</th></tr></thead><tbody>
+<tr><td>样本 × 模型</td><td>2,595 × 9（A 跑道）</td><td>约 23,400 次调用</td></tr>
+<tr><td>单次 token</td><td>~400 in / 40 out</td><td>约 10M input tokens</td></tr>
+<tr><td>Jev 成本</td><td>$0.042/M</td><td>&lt; $1</td></tr>
+<tr><td>LLM API 成本（均价 ¥2/M）</td><td>—</td><td>&lt; ¥50</td></tr>
+<tr><td>本地模型（A1–A5）</td><td>单卡</td><td>约 6–8 机时</td></tr>
+<tr><td>人工</td><td>1 人</td><td>2 天（含跑批与出表）</td></tr>
+</tbody></table>
+<h3>2.7 复现命令</h3>
+<pre><code>
+cd ~/repos/projects/duplex-voice/tools/ruler1
+DATA=~/.hermes/workspace/ruler1/data
+# 生成清单（含 audio_ok 标记）
+python3 build_manifests.py --dataset all --data $DATA --out manifests
+
+# 冒烟：先跑 100 条
+python3 llm_judge.py --manifest manifests/chorus.jsonl --backend openai_compat \
+  --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 --model qwen-plus \
+  --limit 100 --out predictions/qwen-plus__chorus__smoke.jsonl
+python3 score.py --manifest manifests/chorus.jsonl \
+  --pred predictions/qwen-plus__chorus__smoke.jsonl --only-predicted --sweep
+
+# 全量：同一条命令去掉 --limit；换模型只改 --model / --base-url
+</code></pre>
+<h3>2.8 产出模板</h3>
+<pre><code>
+reports/选型总表.md
+| 模型 | S1 | S2 | S3 | FAR_w | FRR@5% | P90 | invalid | 排名 |
+（每格带 95% CI）
+
+reports/工作点__&lt;model&gt;.md   扫阈值表
+reports/错误归因__&lt;model&gt;.md  三桶：没识别出 / 不肯闭嘴 / 蒙对理由错
+</code></pre>
+<hr/>
+<h2>3. 当前可用性与缺口</h2>
+<table><thead><tr><th>项</th><th>状态</th><th>影响</th></tr></thead><tbody>
+<tr><td>ChorusDuplex</td><td>✅ 1,338 条全部就位</td><td>S1 386 / S2 452 / S3 234 / S0 129 / S0_guest 51 / REG 86</td></tr>
+<tr><td>HumDial（中文）</td><td>✅ 889 条全部就位</td><td>S1 99 / S2 300 / REG 490</td></tr>
+<tr><td>WearVox</td><td>⚠️ 1,082 条中仅 368 条音频就位</td><td>仓库实际 7,688 文件 / 59.45GB，我只下了前 1,000 条；补齐需约 8GB</td></tr>
+<tr><td>HumDial（英文）</td><td>❌ 未解压（需 6.9GB 解压空间）</td><td>英文真实样本缺</td></tr>
+<tr><td>S4（媒体人声）</td><td>❌ 0 条</td><td>无法评测电视/外放场景</td></tr>
+<tr><td>模型 API</td><td>❌ DashScope 返回 429</td><td>真实跑分被阻塞</td></tr>
+</tbody></table>
+<p><strong>当前可跑的样本量：2,595 条</strong>（S1 647 / S2 752 / S3 269 / S0 300 / REG 576），可分辨差异约 2–4pt。</p>
+<hr/>
+<h2>4. 排期</h2>
+<table><thead><tr><th>天</th><th>任务</th><th>产出</th></tr></thead><tbody>
+<tr><td>D1</td><td>冒烟（每模型 100 条）+ prompt 修正</td><td>冒烟表 + invalid 率</td></tr>
+<tr><td>D2</td><td>A0–A9 全量跑批</td><td>选型总表初版</td></tr>
+<tr><td>D3</td><td>E2（ASR 转写）与 E4（无历史）消融</td><td>ASR 传导损失、历史增益</td></tr>
+<tr><td>D4</td><td>B1–B5 端到端对照</td><td>上界对比</td></tr>
+<tr><td>D5</td><td>统计（CI/McNemar/工作点）+ 提名 2 个</td><td>定稿报告</td></tr>
+</tbody></table></body></html>
