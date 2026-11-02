@@ -1,0 +1,84 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>尺子1 构建报告</title><style>
+body{font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif;max-width:1080px;margin:32px auto;padding:0 20px;line-height:1.65;color:#1f2328;background:#fff}
+h1{font-size:26px;border-bottom:2px solid #e5e7eb;padding-bottom:8px}
+h2{font-size:21px;margin-top:32px;border-left:4px solid #2563eb;padding-left:10px}
+h3{font-size:17px;margin-top:22px;color:#111827}
+h4{font-size:15px;color:#374151}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+th,td{border:1px solid #d1d5db;padding:6px 9px;text-align:left;vertical-align:top}
+th{background:#f3f4f6;font-weight:600}
+code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12.5px}
+pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:8px;overflow-x:auto;font-size:12.5px}
+pre code{background:none;color:inherit;padding:0}
+blockquote{border-left:4px solid #cbd5e1;margin:10px 0;padding:2px 14px;color:#4b5563}
+hr{border:none;border-top:1px solid #e5e7eb;margin:26px 0}
+</style></head><body><h1>尺子1 构建报告（公开集）</h1>
+<p>&gt; 版本：v0.9　｜　构建时间：2026-11-01</p>
+<p>&gt; 数据位置：<code>~/.hermes/workspace/ruler1/data/</code>（本地，不入库）</p>
+<p>&gt; 工装：<code>tools/ruler1/</code>（fetch / build_manifests / score / stats / baselines）</p>
+<p>&gt; 口径：见《sidetalk评测集构建方案.md》§6 与《拒识sideTalk设计文档.md》§1.3</p>
+<hr/>
+<h2>1. 结论</h2>
+<p>尺子1 已可用：三套公开集完成下载与 S0–S4 映射，共 <strong>3,861 条</strong>样本，判分链路用基线正向/反向验证通过。</p>
+<table><thead><tr><th>指标</th><th>数值</th><th>备注</th></tr></thead><tbody>
+<tr><td>总样本</td><td>3,861</td><td>含回归集 876</td></tr>
+<tr><td>负例（S1–S4）</td><td>2,305</td><td>用于拒识率</td></tr>
+<tr><td>正例（S0）</td><td>680</td><td>用于 FRR</td></tr>
+<tr><td>回归（URB/PH 等）</td><td>876</td><td>只验不退化</td></tr>
+<tr><td>最小可分辨差异</td><td>S1 ±1.8pt / S2 ±2.0pt / S3 ±3.3pt / S0 ±1.3pt</td><td>Wilson 95% CI</td></tr>
+</tbody></table>
+<hr/>
+<h2>2. 数据集与映射结果</h2>
+<table><thead><tr><th>集</th><th>语言</th><th>原始形态</th><th>生成条数</th><th>S0</th><th>S1</th><th>S2</th><th>S3</th><th>REG</th></tr></thead><tbody>
+<tr><td>ChorusDuplex-SideTalk</td><td>中文</td><td>TTS 双声道逐轮</td><td>1,338</td><td>180</td><td>386</td><td>452</td><td>234</td><td>86</td></tr>
+<tr><td>WearVox（non-assistant-directed）</td><td>英文</td><td>眼镜单/多通道</td><td>1,082</td><td>500</td><td>501</td><td>—</td><td>81</td><td>—</td></tr>
+<tr><td>HumDial-FDBench（test，中文部分）</td><td>中/英</td><td>真实双通道</td><td>1,441</td><td>—</td><td>199</td><td>452</td><td>—</td><td>790</td></tr>
+<tr><td><strong>合计</strong></td><td>—</td><td>—</td><td><strong>3,861</strong></td><td><strong>680</strong></td><td><strong>1,086</strong></td><td><strong>904</strong></td><td><strong>315</strong></td><td><strong>876</strong></td></tr>
+</tbody></table>
+<h3>2.1 各集映射规则</h3>
+<table><thead><tr><th>集</th><th>规则</th><th>依据</th></tr></thead><tbody>
+<tr><td>ChorusDuplex</td><td><code>addressee</code> 含 assistant 且说话人为该对话中&quot;对助手说话最多的人&quot; → S0；主用户对旁人 → S1；旁人对主用户 → S2；旁人之间 → S3；<code>kind ∈ {backchannel, interruption}</code> → REG</td><td>逐轮 <code>addressee/kind</code> 标注 + timeline 时间戳；主用户数据驱动判定（不硬编码 user_01）</td></tr>
+<tr><td>WearVox</td><td><code>ground_truth=[Active]</code> → S0；<code>[Mute]</code> 且 id 含 <code>unrelated_talk</code> → S1；<code>[Mute]</code> 且含 <code>bystander_only</code> → S3</td><td>官方字段，582 Mute + 500 Active 与数据集说明一致</td></tr>
+<tr><td>HumDial</td><td><code>talk_to_others</code> → S1；<code>others_talk_to_user_before/after</code> → S2；<code>backchannel</code>/<code>pause</code> → REG</td><td>解压后的意图目录名</td></tr>
+</tbody></table>
+<hr/>
+<h2>3. 判分链路校验（用基线做正反验证）</h2>
+<table><thead><tr><th>基线</th><th>FAR_w</th><th>FRR(S0)</th><th>判定</th></tr></thead><tbody>
+<tr><td>all_silent（全静默）</td><td>0.00%</td><td>100.00%</td><td>✅ 方向正确：不误响应，但吞掉全部真指令</td></tr>
+<tr><td>all_respond（全响应）</td><td>100.00%</td><td>0.00%</td><td>✅ 方向正确：不误吞，但一句不拒</td></tr>
+</tbody></table>
+<p>&gt; 校验中发现并修正的 bug：S0 是&quot;应响应&quot;样本，FRR 应等于其静默率，原实现写成 <code>1 − 静默率</code>，方向反了。已在 <code>score.py</code> 修正，并在表格里把 S0 行标注为「静默率=FRR」。</p>
+<hr/>
+<h2>4. 已知缺口（v0.9 的能力边界）</h2>
+<table><thead><tr><th>缺口</th><th>影响</th><th>处理</th></tr></thead><tbody>
+<tr><td><strong>S4（媒体/电子人声）为 0 条</strong></td><td>电视/外放场景无数据</td><td>需自建集补；公开集里没有对应子集</td></tr>
+<tr><td>S3 仅 315 条（±3.3pt）</td><td>旁人闲聊场景分辨力弱</td><td>后续补 HumDial 英文部分 / 自建</td></tr>
+<tr><td>HumDial 英文部分未解压</td><td>英文真实样本缺</td><td>磁盘放不下（解压需 6.9GB），待外接盘</td></tr>
+<tr><td>CoDeTT 未下载（51GB）</td><td>缺&quot;选型主分辨器&quot;，差异分辨从 ±1.3pt 降到当前水平</td><td>需外接盘或裁剪版</td></tr>
+<tr><td>真实模型跑分未做</td><td>目前只有基线</td><td>DashScope API 返回 429（配额/限流），待可用额度</td></tr>
+<tr><td>无空间信号</td><td>公开集没有 DoA/近讲真值</td><td>尺子1 只能选&quot;裁判&quot;，前端留到尺子2</td></tr>
+</tbody></table>
+<hr/>
+<h2>5. 复现步骤</h2>
+<pre><code>
+cd ~/repos/projects/duplex-voice/tools/ruler1
+DATA=~/.hermes/workspace/ruler1/data
+
+# 1) 下载（断点续传，跳过已完成）
+python3 fetch.py BiggestWave/ChorusDuplex-SideTalk $DATA/chorus --jobs 6
+python3 fetch.py zlinao/WearVox $DATA/wearvox --jobs 6
+python3 fetch.py ASLP-lab/HumDial-FDBench $DATA/humdial_dl --jobs 1
+unzip -oq $DATA/humdial_dl/Humdial-Track2-Test.zip &quot;test/cn_test_nondev/*&quot; -d $DATA/humdial
+
+# 2) 生成清单
+python3 build_manifests.py --dataset chorus  --data $DATA/chorus       --out manifests
+python3 build_manifests.py --dataset wearvox --data $DATA/wearvox      --out manifests
+python3 build_manifests.py --dataset humdial --data $DATA/humdial      --out manifests
+
+# 3) 基线校验 + 判分
+python3 baselines.py --manifest manifests/chorus.jsonl --mode silent  --out predictions/silent__chorus.jsonl
+python3 score.py --manifest manifests/chorus.jsonl --pred predictions/silent__chorus.jsonl --sweep
+</code></pre>
+<hr/>
+<h2>6. 下一步</h2>
+<ol><li><strong>接被测模型</strong>：<code>runners/</code> 增 OpenAI 兼容适配器（Qwen / DeepSeek / Jev），先跑跑道 A（gold 转写 + 真实 ASR 两版）</li><li><strong>补 S4</strong>：用公开媒体音（电视新闻、播客）+ 自建音箱外放录制，先做 200 条冒烟</li><li><strong>补 CoDeTT</strong>：外接盘到位后下载，替换&quot;选型主分辨器&quot;</li><li><strong>出第一张选型表</strong>：≥6 个模型 × 4 指标 + CI + 工作点曲线</li></ol></body></html>

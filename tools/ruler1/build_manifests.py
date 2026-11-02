@@ -119,41 +119,66 @@ def build_wearvox(root, out):
 
 
 # ---------------- HumDial-FDBench ----------------
-def _walk(root):
-    for dirpath, _, files in os.walk(root):
-        for f in files:
-            yield os.path.join(dirpath, f)
+# 解压后的目录结构：test/<cn|en>_test_nondev/<intent>/*.wav + *.json
+# 意图 → 场景：
+#   talk_to_others              → S1（主用户转向旁人 SDO）
+#   others_talk_to_user_before  → S2（旁人对主用户，插话前）
+#   others_talk_to_user_after   → S2（旁人对主用户，插话后）
+#   backchannel                 → REG（URB，仅回归）
+#   pause                       → REG（PH，仅回归）
+HUMDIAL_MAP = {
+    "talk_to_others": ("S1", "silent"),
+    "others_talk_to_user_before": ("S2", "silent"),
+    "others_talk_to_user_after": ("S2", "silent"),
+    "backchannel": ("REG", "silent"),
+    "pause": ("REG", "silent"),
+}
 
 
-def build_humdial(root, out):
-    """HumDial 的标注文件名/字段依赖解压结果；这里做尽力解析并在缺失时给出明确报错。"""
-    cmap = {}
-    for p in _walk(root):
-        if p.endswith((".json", ".jsonl", ".csv", ".tsv", ".txt")) and "labels" in p.lower() or p.endswith(".jsonl"):
-            cmap[p] = True
-    files = list(_walk(root))
-    if not files:
-        print("  [HumDial] 数据目录为空，跳过（需先解压 Humdial-Track2-Test.zip）", file=sys.stderr)
-        return []
-    print(f"  [HumDial] 发现 {len(files)} 个文件；标注候选：{list(cmap)[:5]}", file=sys.stderr)
+def build_humdial(root, out, splits=("test",)):
     rows = []
-    # 通用兜底：目录/文件名里含 URB/PH/TPS/SDO 即取子类
-    for p in files:
-        low = p.lower()
-        sub = next((s for s in ("urb", "ph", "tps", "sdo") if f"/{s}" in low or f"_{s}" in low or f"-{s}" in low), None)
-        if sub and p.endswith((".wav", ".flac")):
-            scene = {"sdo": "S1", "tps": "S2", "urb": "REG", "ph": "REG"}[sub]
-            rows.append({
-                "id": "humdial-" + os.path.splitext(os.path.basename(p))[0],
-                "dataset": "humdial", "split": "test", "audio": p,
-                "channels": 2, "layout": "dual_channel", "system_state": "unknown", "history": [],
-                "gold_action": "respond" if scene == "S0" else "silent",
-                "gold_scene": scene, "gold_lang": "unknown", "meta": {"subtype": sub},
-            })
-    if not rows:
-        print("  [HumDial] 未能从目录结构推断子类 —— 需要按解压后的标注文件补映射规则", file=sys.stderr)
-    else:
+    for split in splits:
+        sroot = os.path.join(root, split)
+        if not os.path.isdir(sroot):
+            continue
+        for lang_dir in sorted(os.listdir(sroot)):
+            lroot = os.path.join(sroot, lang_dir)
+            if not os.path.isdir(lroot):
+                continue
+            lang = "zh" if lang_dir.startswith("cn") else "en"
+            for intent, (scene, gold) in HUMDIAL_MAP.items():
+                idir = os.path.join(lroot, intent)
+                if not os.path.isdir(idir):
+                    continue
+                for f in sorted(os.listdir(idir)):
+                    if not f.endswith(".wav"):
+                        continue
+                    # 同名 json 提供分段与转写（xmin/xmax/text）
+                    stem = f[:-4]
+                    jp = os.path.join(idir, stem + ".json")
+                    segs, text = [], ""
+                    if os.path.exists(jp):
+                        try:
+                            j = json.load(open(jp, encoding="utf-8"))
+                            segs = j.get("speech_segments", []) or j.get("chunks", [])
+                            text = j.get("text") or " ".join(
+                                str(x.get("text", "")) for x in segs)
+                        except Exception:
+                            pass
+                    rows.append({
+                        "id": f"humdial-{split}-{lang}-{intent}-{stem}",
+                        "dataset": "humdial", "split": split,
+                        "audio": os.path.join(idir, f), "channels": 2,
+                        "layout": "dual_channel", "system_state": "idle", "history": [],
+                        "gold_action": gold, "gold_scene": scene, "gold_lang": lang,
+                        "transcript": text[:2000],
+                        "meta": {"intent": intent, "lang_dir": lang_dir,
+                                 "segments": len(segs) if isinstance(segs, list) else 0},
+                    })
+    if rows:
         w(os.path.join(out, "humdial_test.jsonl"), rows)
+    else:
+        print("  [HumDial] 未找到 wav（确认已解压 test/<cn|en>_test_nondev/<intent>/）", file=sys.stderr)
     return rows
 
 
