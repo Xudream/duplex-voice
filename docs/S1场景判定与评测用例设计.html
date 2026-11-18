@@ -1,0 +1,961 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>S1（主用户→旁人）判定规则与评测用例设计</title><style>
+body{font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif;max-width:1080px;margin:32px auto;padding:0 20px;line-height:1.65;color:#1f2328;background:#fff}
+h1{font-size:26px;border-bottom:2px solid #e5e7eb;padding-bottom:8px}
+h2{font-size:21px;margin-top:32px;border-left:4px solid #2563eb;padding-left:10px}
+h3{font-size:17px;margin-top:22px;color:#111827}
+h4{font-size:15px;color:#374151}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+th,td{border:1px solid #d1d5db;padding:6px 9px;text-align:left;vertical-align:top}
+th{background:#f3f4f6;font-weight:600}
+code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12.5px}
+pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:8px;overflow-x:auto;font-size:12.5px}
+pre code{background:none;color:inherit;padding:0}
+blockquote{border-left:4px solid #cbd5e1;margin:10px 0;padding:2px 14px;color:#4b5563}
+hr{border:none;border-top:1px solid #e5e7eb;margin:26px 0}
+</style></head><body><h1>S1（主用户→旁人）判定规则与评测用例设计</h1>
+<blockquote>
+<p>版本：v1.0 · 2026-11-17 ｜ 上位文档：<code>docs/拒识sideTalk设计文档.md</code> §1.3（场景定义与指标）、<code>docs/v2/sideTalk-技术洞察-2026Q4.md</code>（对齐公开口径）<br />
+适用范围：家庭音箱（远场、多成员）、手机（近场、常伴随外放）；眼镜为预留场景，本设计给接口不给组量</p>
+</blockquote>
+<hr />
+<h2>1. S1 到底是什么：一句话与三个必要条件</h2>
+<p><strong>一句话</strong>：主用户在当前会话中，把语音<strong>投向一个具体的人</strong>（而非设备），系统应 <strong>silent_record</strong>（不响应，但把这句话作为上下文记下来）。</p>
+<p>三个必要条件（缺一即不是 S1）：</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>条件</th>
+<th>判据</th>
+<th>反例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>说话人是主用户</strong></td>
+<td>声纹命中（闭集判定）</td>
+<td>旁人说 → S2/S3；电子源 → S4</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>受话人是一个具体的人</strong></td>
+<td>有第三方指称、或存在"人—人"交互语用（递物、家务、吩咐）</td>
+<td>无对象 → self-talk；对象是设备 → S0</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>系统当前不产生响应义务</strong></td>
+<td>不承接系统上一句、不含唤醒词/助手名</td>
+<td>承接系统提问 → S0</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>条件 2 是 S1 的<strong>定义核心</strong>，也是它与 self-talk 的唯一分界：self-talk 是"没人听"，S1 是"有别人在听，只是不是设备"。</p>
+</blockquote>
+<hr />
+<h2>2. 判定链：五层信号与一步决策树</h2>
+<h3>2.1 五层信号（按可靠性排序，不按采集顺序）</h3>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>信号</th>
+<th>可靠性</th>
+<th>在 S1 判定中的作用</th>
+<th>取不到时的降级</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>① 身份层</td>
+<td>主用户声纹（ECAPA/CAM++ 类）、注册状态</td>
+<td><strong>最高</strong>（文本无关）</td>
+<td>先分流：非主用户 → 不进 S1</td>
+<td>降级到距离 + 声纹聚类</td>
+</tr>
+<tr>
+<td>② 空间层</td>
+<td>DoA（音箱环形麦阵）、近讲能量比/双麦声道差（手机）、远场混响特征</td>
+<td>高</td>
+<td>朝向偏离设备 → 指向人的概率升高</td>
+<td>降级到语义 + 时序</td>
+</tr>
+<tr>
+<td>③ 语用层</td>
+<td>第三方指称（"妈/宝宝/你"）、人—人动作（递/拿/放/帮）、吩咐句式（"把 X 给我"）</td>
+<td>中—高</td>
+<td>S1 的主证据（唯一能区分"同形命令"的语义线索）</td>
+<td>必须存在，否则进 clarify 分支</td>
+</tr>
+<tr>
+<td>④ 时序层</td>
+<td>是否承接系统上一句、是否在系统播报中、是否紧跟随设备提问</td>
+<td>中</td>
+<td>承接 → S0；播报中且无衔接 → S1 概率升高</td>
+<td>降级到语用层</td>
+</tr>
+<tr>
+<td>⑤ 上下文层</td>
+<td>会话话题连续性、当前任务槽位是否待填、屏幕/设备态（手机前台应用）</td>
+<td>中—低</td>
+<td>消解"半同形"（同一话题内的旁白）</td>
+<td>不参与强判</td>
+</tr>
+</tbody>
+</table>
+<p><strong>关键设计原则</strong>：① ② 决定"能不能进 S1"，③ ④ 决定"是不是 S1"。<strong>只靠声学永远判不出 S1</strong>（S1 与 S0 声学同形），只靠语义也判不出（文本也同形）——必须"声学定位 + 语用定性"两条腿。</p>
+<h3>2.2 决策树（可直接实现为规则基线，也是标注员的判定流程）</h3>
+<pre><code>输入：一句话 + 声纹结果 + DoA/近讲 + 系统状态 + 会话上下文
+│
+├─ Q1 声纹命中主用户？
+│   ├─ 否 → 是电子源？是→S4；否→与主用户有交流关系？是→S2；否→S3      【S1 不适用】
+│   └─ 是 → 继续
+│
+├─ Q2 含唤醒词 / 助手名 / 明确设备指称（&quot;小X&quot;）？
+│   ├─ 是 → S0（放行）——即使句中还有旁人指称，唤醒优先
+│   └─ 否 → 继续
+│
+├─ Q3 承接系统上一句（答句/追问/槽位补充）且无语用冲突？
+│   ├─ 是 → S0
+│   └─ 否 → 继续
+│
+├─ Q4 有第三方指称或人—人语用（吩咐/递物/家常）？
+│   ├─ 是 → 继续 Q5
+│   └─ 否 → 无交流对象？是→self-talk（静默，不记）；否→低置信，进 Q6
+│
+├─ Q5 空间/时序证据是否一致？
+│   ├─ 朝向偏离设备 或 处于播报中且话题无关
+│   │     ├─ 一致 → S1（silent_record），置信高
+│   │     └─ 矛盾（朝向设备却对旁人说话）→ S1 + 低置信标记（评测单列&quot;矛盾样本&quot;）
+│   └─ 无空间信号 → 依语用强度：强（有称呼）→ S1；弱 → Q6
+│
+└─ Q6 低置信分支（不得一刀切静默）
+    ├─ 含请求句式 或 可能承接系统 → clarify（轻确认，出声不执行，单列 clarify 率）
+    └─ 否则 → silent_record（记录但不响应）
+</code></pre>
+<p><strong>为什么 Q6 必须存在</strong>：S1 的最高代价不是误静默，而是把真指令当旁白吞掉（FRR）。clarify 是唯一"可逆"的错误处理方式——出声但不动手。</p>
+<h3>2.3 置信度分级（用于分层报告与阈值标定）</h3>
+<table>
+<thead>
+<tr>
+<th>等级</th>
+<th>判据</th>
+<th>期望动作</th>
+<th>评测用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>H 高</strong></td>
+<td>有声纹 + 空间偏离 + 显式第三方指称</td>
+<td>silent_record</td>
+<td>主指标分母（S1 拒识率）</td>
+</tr>
+<tr>
+<td><strong>M 中</strong></td>
+<td>有声纹 + 语用明确，但空间信号缺失</td>
+<td>silent_record</td>
+<td>主指标分母</td>
+</tr>
+<tr>
+<td><strong>L 低</strong></td>
+<td>语用模糊、或空间与语用冲突</td>
+<td>clarify 或 silent_record（允许两种都算对）</td>
+<td>单列"模糊集"，不进主指标</td>
+</tr>
+<tr>
+<td><strong>X 排除</strong></td>
+<td>声纹未命中、或含唤醒词、或承接系统</td>
+<td>不计入 S1</td>
+<td>用于边界对照</td>
+</tr>
+</tbody>
+</table>
+<p><strong>评测纪律</strong>：主指标只统计 H + M；L 集单独报"歧义处理率"，X 集进 S0/S2/S3/S4。</p>
+<hr />
+<h2>3. 边界：S1 与七个邻居的判据与反例</h2>
+<h3>3.1 边界矩阵</h3>
+<table>
+<thead>
+<tr>
+<th>邻居</th>
+<th>一句话判据</th>
+<th>S1 侧特征</th>
+<th>邻居侧特征</th>
+<th>典型反例（易错）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>S0 真指令</strong></td>
+<td>这句话有没有"设备义务"</td>
+<td>无唤醒词、不承接上一句、受话人是人</td>
+<td>有唤醒词 / 承接系统提问 / 待填槽位</td>
+<td>"把空调调到 26 度"（对设备）vs "把空调遥控器递给我"（对人）——<strong>同一句式，受话人不同</strong></td>
+</tr>
+<tr>
+<td><strong>S0_guest 访客指令</strong></td>
+<td>说话人对设备下指令，但不是机主</td>
+<td>说话人是主用户</td>
+<td>说话人是访客，且带唤醒词</td>
+<td>客人说"小X，放首歌"——不是 sideTalk，是权限问题</td>
+</tr>
+<tr>
+<td><strong>S2 旁人→主用户</strong></td>
+<td>谁对谁说</td>
+<td>说话人是主用户</td>
+<td>说话人是旁人，受话人是主用户</td>
+<td>"你手机响了"（家人提醒你）——容易误贴 S1</td>
+</tr>
+<tr>
+<td><strong>S3 旁人↔旁人</strong></td>
+<td>主用户是否参与</td>
+<td>主用户是发起方</td>
+<td>主用户完全不在场</td>
+<td>客厅两家人聊天，你在厨房</td>
+</tr>
+<tr>
+<td><strong>S4 媒体/电子人声</strong></td>
+<td>声源是人还是设备</td>
+<td>人声、近场、有呼吸/口误</td>
+<td>电子音、无呼吸、可检测到播放中</td>
+<td>电视剧台词"把枪放下"被当 S1 标注（应为 S4）</td>
+</tr>
+<tr>
+<td><strong>backchannel 附和</strong></td>
+<td>是否争夺话轮</td>
+<td>寻求对方回应（要动作/要回答）</td>
+<td>只表达"我在听"（嗯/对/好）</td>
+<td>"嗯"（附和，属语义 VAD）vs "嗯，你放那儿吧"（S1）</td>
+</tr>
+<tr>
+<td><strong>pause 停顿</strong></td>
+<td>话轮是否结束</td>
+<td>语义完整、有受话人</td>
+<td>句中犹豫、语义未完</td>
+<td>"那个……"（停顿）vs "那个，你帮我拿一下"（S1）</td>
+</tr>
+<tr>
+<td><strong>self-talk 自言自语</strong></td>
+<td>有没有交流对象</td>
+<td>有第三方在场/可指称</td>
+<td>无对象、无指称、常为自我提醒</td>
+<td>"钥匙放哪儿了"（自言自语）vs "老公，钥匙放哪儿了"（S1）</td>
+</tr>
+<tr>
+<td><strong>barge-in 真打断</strong></td>
+<td>是否要接管设备</td>
+<td>不针对设备</td>
+<td>针对设备、要求改变播报</td>
+<td>播报中说"等一下"（打断，属主链路）</td>
+</tr>
+</tbody>
+</table>
+<h3>3.2 三种"合法歧义"，必须写进标注规范而不是靠标注员猜</h3>
+<ol>
+<li><strong>同一句、不同系统状态</strong>：系统 idle 时对旁人说 = 不开始；系统 speaking 时对旁人说 = 是否暂停/恢复。CoDeTT 的做法是把 Side-talk 同时放进 Maintain 与 Dismiss 两个动作下【已核】——我们也必须<strong>按状态分别打动作标签</strong>，不能只打场景标签。</li>
+<li><strong>同一句、两种受话人</strong>（"帮我把灯关了"）：如果主用户同时面向设备又面向旁人，动作取决于谁被满足——标注规则：<strong>以"是否要求设备执行"为准</strong>，要求设备执行 → S0；只在向人描述 → S1。</li>
+<li><strong>媒体里的第二人称</strong>（电视里"你好，帮我……"）：一律 S4，不因为句子像指令就标 S1。</li>
+</ol>
+<h3>3.3 边界判定的操作化顺序（标注员按此顺序问，不许跳步）</h3>
+<pre><code>① 说话人是谁？（声纹/听感）      → 非主用户：直接进 S2/S3/S4
+② 有没有唤醒词/设备指称？        → 有：S0
+③ 是不是回答系统刚说的话？        → 是：S0
+④ 这句话想让谁做动作/给谁听？     → 人：S1；设备：S0；没人：self-talk
+⑤ 系统当时在说话吗？            → 在：动作标签加 &quot;during-speech&quot;，期望可能是 stop/resume
+⑥ 有没有媒体证据？              → 有：S4（即使句子像人声指令）
+</code></pre>
+<hr />
+<h2>4. 评测用例设计：先定维度，再定族，最后定格子</h2>
+<h3>4.1 七个正交维度（覆盖 = 维度的笛卡尔积上取覆盖，不是随机撒）</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>取值</th>
+<th>为什么必须覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>D1 说话人</td>
+<td>主用户 / 访客 / 第三方成人 / 儿童 / 多说话人混合</td>
+<td>儿童声线与成人差异大，是声纹最薄弱环节</td>
+</tr>
+<tr>
+<td>D2 受话对象</td>
+<td>设备 / 特定人（配偶/孩子/客人）/ 群体 / 自己 / 不明确</td>
+<td>S1 只在"特定人"上有定义</td>
+</tr>
+<tr>
+<td>D3 空间</td>
+<td>近场正对 / 近场侧向 / 远场正对 / 远场侧向 / 跨房间</td>
+<td>手机与音箱的差异几乎全在空间维度</td>
+</tr>
+<tr>
+<td>D4 系统状态</td>
+<td>idle / speaking / 刚停止（0–2 s）/ 恢复中 / 播放媒体</td>
+<td>同一句在 speaking 时的正确动作不同</td>
+</tr>
+<tr>
+<td>D5 语用</td>
+<td>请求 / 命令 / 陈述 / 疑问 / 附和 / 犹豫 / 呼唤（称呼）</td>
+<td>只有"呼唤 + 请求"才是高置信 S1</td>
+</tr>
+<tr>
+<td>D6 内容同形度</td>
+<td>与 S0 完全同形 / 半同形（只差称呼）/ 非同形（明显家常）</td>
+<td>同形样本是 S1 的核心难度</td>
+</tr>
+<tr>
+<td>D7 干扰</td>
+<td>无 / 电视外放 / 音乐 / 厨房噪声 / 回声 / 双人同时说</td>
+<td>真实家庭的主场景</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>覆盖的定义</strong>：不是"每个维度都有样本"，而是<strong>每个"族 × 关键维度"的格子都有下限样本</strong>（见 §5.2）。</p>
+</blockquote>
+<h3>4.2 十二个 S1 用例族（每族给出构造要点与反例要求）</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>族</th>
+<th>构造要点</th>
+<th>期望动作</th>
+<th>必须配的反例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>F1</td>
+<td><strong>称呼型吩咐</strong></td>
+<td>"妈，把盐递给我"；含明确称谓 + 人—人动作</td>
+<td>silent_record</td>
+<td>同词去称谓 + 加唤醒词 → S0</td>
+</tr>
+<tr>
+<td>F2</td>
+<td><strong>同形命令型</strong></td>
+<td>"把空调调到 26 度"（对家人复述） vs 对设备说</td>
+<td>silent_record</td>
+<td>同句对设备 → S0（<strong>配对样本</strong>）</td>
+</tr>
+<tr>
+<td>F3</td>
+<td><strong>指代型</strong></td>
+<td>"这个帮我放桌上"（指物品，不是对设备）</td>
+<td>silent_record</td>
+<td>指代 + 面向设备 → S0/clarify</td>
+</tr>
+<tr>
+<td>F4</td>
+<td><strong>家务流水句</strong></td>
+<td>"你先把衣服收了，我一会儿洗碗"</td>
+<td>silent_record</td>
+<td>单句无对象 → self-talk</td>
+</tr>
+<tr>
+<td>F5</td>
+<td><strong>远场/跨房间</strong></td>
+<td>主用户在厨房对客厅家人喊话</td>
+<td>silent_record</td>
+<td>跨房间喊设备（含唤醒词）→ S0</td>
+</tr>
+<tr>
+<td>F6</td>
+<td><strong>播报中旁白</strong></td>
+<td>系统播报天气时，用户对家人说"晚上吃啥"</td>
+<td>silent_record（不中断汇报）+ 播报应继续</td>
+<td>播报中说"等一下" → barge-in（主链路）</td>
+</tr>
+<tr>
+<td>F7</td>
+<td><strong>混合轮</strong></td>
+<td>一句话里既对家人说又对设备说："妈你等一下——小X，声音小点"</td>
+<td>拆两段判定，设备段 S0</td>
+<td>整句当 S1 → 会吞掉指令（错误标注）</td>
+</tr>
+<tr>
+<td>F8</td>
+<td><strong>电话/视频</strong></td>
+<td>用户接电话，说"我一会儿回给你"</td>
+<td>silent_record</td>
+<td>电话中说"小X 挂断" → S0</td>
+</tr>
+<tr>
+<td>F9</td>
+<td><strong>儿童对家长</strong></td>
+<td>孩子说"妈妈，我要喝水"</td>
+<td>silent_record</td>
+<td>孩子对设备说"小X 讲故事" → S0_guest（另册）</td>
+</tr>
+<tr>
+<td>F10</td>
+<td><strong>self-talk 临界</strong></td>
+<td>"钥匙放哪儿了……"(无对象)</td>
+<td>静默，不记上下文</td>
+<td>加称谓 → S1</td>
+</tr>
+<tr>
+<td>F11</td>
+<td><strong>媒体临界</strong></td>
+<td>电视台词"把枪放下"、短视频"帮我点个赞"</td>
+<td>S4（不是 S1）</td>
+<td>真人模仿电视腔 → 仍是 S1（考声学判别）</td>
+</tr>
+<tr>
+<td>F12</td>
+<td><strong>模糊/低置信</strong></td>
+<td>"把它关了吧"（对人或对设备都可能）</td>
+<td>clarify 或 silent_record 均可</td>
+<td>强上下文（槽位待填）→ 应判 S0</td>
+</tr>
+</tbody>
+</table>
+<h3>4.3 反事实配对（比堆样本更能证明"判得对"）</h3>
+<p>三组配对，每组同文本、只改一个变量：</p>
+<table>
+<thead>
+<tr>
+<th>配对</th>
+<th>固定</th>
+<th>改变</th>
+<th>验证什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P1 受话人对</td>
+<td>同一句文本、同一说话人、同一房间</td>
+<td>受话人：设备 / 家人</td>
+<td>模型是否真的在判"对象"，还是在判"文本"</td>
+</tr>
+<tr>
+<td>P2 状态对</td>
+<td>同一句、同一受话人</td>
+<td>系统 idle / speaking</td>
+<td>动作是否随状态切换（CoDeTT 式 Maintain vs Dismiss）</td>
+</tr>
+<tr>
+<td>P3 距离对</td>
+<td>同一句、同一受话人</td>
+<td>近场正对 / 远场侧向</td>
+<td>是否依赖空间捷径；去掉空间后掉多少</td>
+</tr>
+</tbody>
+</table>
+<p><strong>判分</strong>：配对准确率（pair accuracy）= 一对同时判对才计分。这一项能把"永远静默"策略直接打到 ≤50%。</p>
+<h3>4.4 组量：先算 CI 再定条数</h3>
+<p>Wilson 95% 半宽 ≈ 1.96·√(p(1−p)/n)，p≈0.9 时：</p>
+<table>
+<thead>
+<tr>
+<th>目标半宽</th>
+<th>所需 n（每场景）</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>±4.2pt</td>
+<td>200</td>
+<td>仅够看趋势（HumDial SDO 测试集就是这个量级）</td>
+</tr>
+<tr>
+<td>±2.6pt</td>
+<td>500</td>
+<td><strong>单族下限</strong>：可以报"某族是否达标"</td>
+</tr>
+<tr>
+<td>±1.9pt</td>
+<td>900</td>
+<td><strong>S1 主指标下限</strong>：与现有尺子 986 条一致</td>
+</tr>
+<tr>
+<td>±1.3pt</td>
+<td>2,000</td>
+<td>模型间 &lt;3pt 差异才可分</td>
+</tr>
+</tbody>
+</table>
+<p><strong>S1 建议组量（v2 尺子）</strong>：主集 <strong>1,000 条</strong>（H 700 + M 300）+ 模糊集 <strong>200 条</strong> + 边界对照 <strong>400 条</strong>（S0 200 / self-talk 100 / S4 100）= <strong>1,600 条语音</strong>；另有 <strong>300 对</strong>反事实配对（P1/P2/P3 各 100 对），<strong>从既有录音中剪辑复用，不额外采集</strong>。</p>
+<hr />
+<h2>5. 全场景覆盖怎么证明（不是"我觉得覆盖了"）</h2>
+<h3>5.1 覆盖矩阵（manifest 自带，脚本可校验）</h3>
+<p>每个样本在 JSONL 里带 7 个维度字段 + 族字段：</p>
+<pre><code class="language-json">{&quot;id&quot;:&quot;s1_f2_0007&quot;,&quot;scene&quot;:&quot;S1&quot;,&quot;family&quot;:&quot;F2&quot;,&quot;speaker&quot;:&quot;main&quot;,&quot;addressee&quot;:&quot;person_spouse&quot;,
+ &quot;space&quot;:&quot;far_offaxis&quot;,&quot;sys_state&quot;:&quot;speaking&quot;,&quot;pragmatics&quot;:&quot;command&quot;,&quot;isomorph&quot;:&quot;full&quot;,
+ &quot;interference&quot;:&quot;tv&quot;,&quot;conf&quot;:&quot;H&quot;,&quot;pair_id&quot;:&quot;p1_0012&quot;,&quot;audio&quot;:&quot;s1/f2/0007.wav&quot;,
+ &quot;expect_action&quot;:&quot;silent_record&quot;,&quot;note&quot;:&quot;复述给家人，文本与 S0 同形&quot;}
+</code></pre>
+<p><strong>覆盖判据（五条，缺一不算覆盖）</strong>：</p>
+<ol>
+<li><strong>族覆盖</strong>：F1–F12 每族 ≥ 40 条（H/M 合计）。</li>
+<li><strong>格子覆盖</strong>：<code>族 × D6 同形度</code> 的 12×3 = 36 格，每格 ≥ 10 条（同形样本是核心，不允许为空）。</li>
+<li><strong>状态覆盖</strong>：<code>族 × D4</code> 的 12×5 = 60 格，每格 ≥ 5 条，且 idle 与 speaking 两态各 ≥ 30%。</li>
+<li><strong>配对覆盖</strong>：P1/P2/P3 各 ≥ 100 对，且每对两侧的 conf 等级一致（否则差异来自难度而非变量）。</li>
+<li><strong>反例覆盖</strong>：每族的"必须配的反例"（表 4.2 最后一列）各 ≥ 20 条，且落在对照集里而不是 S1 集里。</li>
+</ol>
+<h3>5.2 覆盖自检脚本（放在 <code>tools/check_coverage.py</code>）</h3>
+<pre><code class="language-python"># 伪代码：读 manifest → 打表 → 断言
+need_family = {f&quot;F{i}&quot;: 40 for i in range(1, 13)}
+need_cell   = 10        # 族 × 同形度
+need_state  = 5         # 族 × 状态
+need_pair   = 100       # 每种配对
+
+errs = []
+for fam, n in Counter(x[&quot;family&quot;] for x in rows if x[&quot;scene&quot;] == &quot;S1&quot;).items():
+    if n &lt; need_family[fam]: errs.append(f&quot;{fam} 仅 {n} 条&quot;)
+for (fam, iso), n in Counter((x[&quot;family&quot;], x[&quot;isomorph&quot;]) for x in rows).items():
+    if n &lt; need_cell: errs.append(f&quot;{fam}/{iso} 仅 {n} 条&quot;)
+for (fam, st), n in Counter((x[&quot;family&quot;], x[&quot;sys_state&quot;]) for x in rows).items():
+    if n &lt; need_state: errs.append(f&quot;{fam}/{st} 仅 {n} 条&quot;)
+for p, n in Counter(x[&quot;pair_id&quot;][:2] for x in rows if x.get(&quot;pair_id&quot;)).items():
+    if n &lt; need_pair * 2: errs.append(f&quot;配对 {p} 仅 {n} 条&quot;)
+assert not errs, &quot;\n&quot;.join(errs)
+</code></pre>
+<p><strong>跑通这条断言，才有资格说"覆盖了"。</strong></p>
+<h3>5.3 泄漏检查（防"偷分"，比覆盖更容易被忽略）</h3>
+<table>
+<thead>
+<tr>
+<th>泄漏</th>
+<th>表现</th>
+<th>检查方法</th>
+<th>修法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>声纹泄漏</td>
+<td>S1 全是家人、S0 全是机主 → 靠声纹就能分类</td>
+<td>统计 <code>speaker</code> 分布；S1 与 S0 的说话人分布必须重叠</td>
+<td>S1 也由机主录制（本来就要求机主说）</td>
+</tr>
+<tr>
+<td>词表泄漏</td>
+<td>S1 出现"递/妈"、S0 出现"空调/播放" → 词表捷径</td>
+<td>训练 n-gram LR，若 F1 &gt; 0.85 即有泄漏</td>
+<td>同形样本（F2）比例 ≥ 30%</td>
+</tr>
+<tr>
+<td>房间泄漏</td>
+<td>S1 全在客厅、S0 全在厨房 → 靠混响分类</td>
+<td>比较各房间的 S1/S0 比例</td>
+<td>每房间各采两类</td>
+</tr>
+<tr>
+<td>时长泄漏</td>
+<td>S1 更长/更短</td>
+<td>统计时长分布 KS 检验</td>
+<td>对齐 + 裁剪</td>
+</tr>
+<tr>
+<td>位置泄漏</td>
+<td>S1 全侧向、S0 全正对</td>
+<td>交叉表</td>
+<td>补正对/侧向各半</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>6. 判分：S1 这一项到底怎么算分</h2>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>分母</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>S1 拒识率</strong></td>
+<td>H+M 的应静默样本</td>
+<td>主指标；clarify 不算对（clarify 单列）</td>
+</tr>
+<tr>
+<td>误执行</td>
+<td>应静默样本</td>
+<td>触发工具调用即计；<strong>必须为 0</strong></td>
+</tr>
+<tr>
+<td><strong>上下文完整性</strong></td>
+<td>S1 正例中"后续被引用且能答对"的比例</td>
+<td>检验 silent_record 是否真记了（不记 = 协议用错）</td>
+</tr>
+<tr>
+<td>配对准确率</td>
+<td>P1/P2/P3 各 100 对</td>
+<td>防固定动作策略</td>
+</tr>
+<tr>
+<td>模糊集处理率</td>
+<td>L 集 200 条</td>
+<td>只报分布（clarify/silent 各多少），不设目标</td>
+</tr>
+<tr>
+<td>静默决策延迟</td>
+<td>应静默事件</td>
+<td>P50 ≤ 390 ms；与判停共用一次前向</td>
+</tr>
+</tbody>
+</table>
+<p><strong>分层报告（必须同时给）</strong>：按 <code>family</code>、<code>isomorph</code>、<code>sys_state</code>、<code>conf</code> 四个切片各报一次——只看总分会掩盖"同形样本全错"这种致命问题。</p>
+<hr />
+<h2>7. 施工顺序（两周可落地）</h2>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>产出</th>
+<th>判据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>W1 上半</td>
+<td>12 族脚本 + 录音（H 集 400 条）</td>
+<td>每族 ≥ 30 条，覆盖 F1–F6</td>
+</tr>
+<tr>
+<td>W1 下半</td>
+<td>配对样本 150 对（P1/P2）</td>
+<td>同文本、同说话人、只改一个变量</td>
+</tr>
+<tr>
+<td>W2 上半</td>
+<td>反例集（S0 200 / self-talk 100 / S4 100）+ 模糊集 100</td>
+<td>反例必须落在对照集，不进 S1 分母</td>
+</tr>
+<tr>
+<td>W2 下半</td>
+<td>manifest + 覆盖脚本 + 泄漏检查</td>
+<td><code>check_coverage.py</code> 全绿；LR 基线 F1 ≤ 0.85</td>
+</tr>
+</tbody>
+</table>
+<p><strong>验收门槛</strong>：覆盖五条全绿 + 泄漏五项全绿 + 规则基线（决策树）在 H 集上 ≥ 85%（低于此说明标注口径或信号有问题，先查标注，别急着上模型）。</p>
+<hr />
+<h2>附录 A：24 条示例用例（可直接拿去录）</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>族</th>
+<th>文本</th>
+<th>说话人</th>
+<th>空间</th>
+<th>状态</th>
+<th>期望</th>
+<th>考点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>F1</td>
+<td>妈，把盐递给我</td>
+<td>主用户</td>
+<td>远场侧向</td>
+<td>idle</td>
+<td>silent_record</td>
+<td>称谓 + 递物</td>
+</tr>
+<tr>
+<td>2</td>
+<td>F1</td>
+<td>老婆，你看见我外套了吗</td>
+<td>主用户</td>
+<td>近场侧向</td>
+<td>speaking</td>
+<td>silent_record</td>
+<td>播报中旁白</td>
+</tr>
+<tr>
+<td>3</td>
+<td>F1</td>
+<td>宝贝，过来吃饭</td>
+<td>主用户</td>
+<td>远场</td>
+<td>idle</td>
+<td>silent_record</td>
+<td>呼唤儿童</td>
+</tr>
+<tr>
+<td>4</td>
+<td>F2</td>
+<td>把空调调到 26 度</td>
+<td>主用户</td>
+<td>远场侧向</td>
+<td>idle</td>
+<td>silent_record</td>
+<td>同形命令</td>
+</tr>
+<tr>
+<td>5</td>
+<td>F2</td>
+<td>把空调调到 26 度</td>
+<td>主用户</td>
+<td>近场正对</td>
+<td>idle</td>
+<td>respond（对照）</td>
+<td>同形 → S0</td>
+</tr>
+<tr>
+<td>6</td>
+<td>F2</td>
+<td>小X，把空调调到 26 度</td>
+<td>主用户</td>
+<td>近场正对</td>
+<td>idle</td>
+<td>respond</td>
+<td>唤醒优先</td>
+</tr>
+<tr>
+<td>7</td>
+<td>F3</td>
+<td>这个帮我放桌上</td>
+<td>主用户</td>
+<td>远场侧向</td>
+<td>idle</td>
+<td>silent_record</td>
+<td>指代人物</td>
+</tr>
+<tr>
+<td>8</td>
+<td>F3</td>
+<td>这个放桌上，小X 记一下</td>
+<td>主用户</td>
+<td>近场</td>
+<td>idle</td>
+<td>respond（拆段）</td>
+<td>混合轮设备段</td>
+</tr>
+<tr>
+<td>9</td>
+<td>F4</td>
+<td>你先把衣服收了，我一会儿洗碗</td>
+<td>主用户</td>
+<td>远场</td>
+<td>speaking</td>
+<td>silent_record</td>
+<td>流水句</td>
+</tr>
+<tr>
+<td>10</td>
+<td>F5</td>
+<td>老张，楼下快递到了</td>
+<td>主用户</td>
+<td>远场跨房间</td>
+<td>idle</td>
+<td>silent_record</td>
+<td>远场 + 称呼</td>
+</tr>
+<tr>
+<td>11</td>
+<td>F5</td>
+<td>小X，楼下快递到了吗</td>
+<td>主用户</td>
+<td>远场跨房间</td>
+<td>idle</td>
+<td>respond</td>
+<td>远场 + 唤醒</td>
+</tr>
+<tr>
+<td>12</td>
+<td>F6</td>
+<td>晚上吃啥</td>
+<td>主用户</td>
+<td>远场侧向</td>
+<td>speaking</td>
+<td>silent_record + 继续播报</td>
+<td>播报中不中断</td>
+</tr>
+<tr>
+<td>13</td>
+<td>F6</td>
+<td>等一下，先别说了</td>
+<td>主用户</td>
+<td>近场正对</td>
+<td>speaking</td>
+<td>stop（barge-in）</td>
+<td>边界反例</td>
+</tr>
+<tr>
+<td>14</td>
+<td>F7</td>
+<td>妈你等一下——小X，声音小点</td>
+<td>主用户</td>
+<td>远场</td>
+<td>idle</td>
+<td>前段 silent_record，后段 respond</td>
+<td>混合轮</td>
+</tr>
+<tr>
+<td>15</td>
+<td>F8</td>
+<td>我一会儿回给你</td>
+<td>主用户</td>
+<td>近场</td>
+<td>idle</td>
+<td>silent_record</td>
+<td>电话语境</td>
+</tr>
+<tr>
+<td>16</td>
+<td>F8</td>
+<td>小X，帮我挂断</td>
+<td>主用户</td>
+<td>近场</td>
+<td>idle</td>
+<td>respond</td>
+<td>电话中控设备</td>
+</tr>
+<tr>
+<td>17</td>
+<td>F9</td>
+<td>妈妈，我要喝水</td>
+<td>儿童</td>
+<td>近场</td>
+<td>idle</td>
+<td>silent_record</td>
+<td>儿童声线</td>
+</tr>
+<tr>
+<td>18</td>
+<td>F9</td>
+<td>小X，讲个故事</td>
+<td>儿童</td>
+<td>近场</td>
+<td>idle</td>
+<td>respond</td>
+<td>访客/儿童指令（另册）</td>
+</tr>
+<tr>
+<td>19</td>
+<td>F10</td>
+<td>钥匙放哪儿了……</td>
+<td>主用户</td>
+<td>近场</td>
+<td>idle</td>
+<td>silent（不记）</td>
+<td>self-talk</td>
+</tr>
+<tr>
+<td>20</td>
+<td>F10</td>
+<td>老公，钥匙放哪儿了</td>
+<td>主用户</td>
+<td>近场侧向</td>
+<td>idle</td>
+<td>silent_record</td>
+<td>self-talk → S1</td>
+</tr>
+<tr>
+<td>21</td>
+<td>F11</td>
+<td>（电视）把枪放下</td>
+<td>电子源</td>
+<td>远场</td>
+<td>speaking</td>
+<td>silent</td>
+<td>媒体台词</td>
+</tr>
+<tr>
+<td>22</td>
+<td>F11</td>
+<td>（真人模仿播音腔）把枪放下</td>
+<td>主用户</td>
+<td>远场侧向</td>
+<td>idle</td>
+<td>silent_record</td>
+<td>抗模仿</td>
+</tr>
+<tr>
+<td>23</td>
+<td>F12</td>
+<td>把它关了吧</td>
+<td>主用户</td>
+<td>远场</td>
+<td>idle</td>
+<td>clarify 或 silent_record</td>
+<td>模糊</td>
+</tr>
+<tr>
+<td>24</td>
+<td>F12</td>
+<td>把它关了吧（槽位待填：刚问了"要关哪个"）</td>
+<td>主用户</td>
+<td>近场正对</td>
+<td>idle</td>
+<td>respond</td>
+<td>上下文强 → S0</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>附录 B：与公开口径的映射</h2>
+<table>
+<thead>
+<tr>
+<th>本设计</th>
+<th>HumDial</th>
+<th>VGBench</th>
+<th>CoDeTT</th>
+<th>FDB v1.5</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>S1</td>
+<td>SDO（主用户→他人）</td>
+<td>side-talk</td>
+<td>Side-talk（Maintain / Dismiss 两态）</td>
+<td>talking to others</td>
+</tr>
+<tr>
+<td>S2</td>
+<td>TPS 的一部分（旁人→主用户）</td>
+<td>—</td>
+<td>—</td>
+<td>background speech 的一部分</td>
+</tr>
+<tr>
+<td>S3</td>
+<td>TPS</td>
+<td>side-talk（旁观者主体）</td>
+<td>Dismiss:Exclusion</td>
+<td>background speech</td>
+</tr>
+<tr>
+<td>S4</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>background speech（媒体）</td>
+</tr>
+<tr>
+<td>self-talk</td>
+<td>—</td>
+<td>self-talk</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>silent_record</td>
+<td>隐含在 Rejection 里</td>
+<td>action = silence</td>
+<td>Dismiss</td>
+<td>Resume</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>引用注意：HumDial 的 Rejection 综合分、VGBench 的 mute rate、FDB 的 Resume 分母互不相同，<strong>只能并列，不能换算</strong>（见 v2 定稿 §2.4）。</p>
+</blockquote></body></html>
